@@ -1,0 +1,19 @@
+- name: Create RADOS GW
+  block: 
+    - name: Generate RGW spec file
+      ansible.builtin.template:
+        src: rgw_spec.yml.j2
+        dest: /tmp/rgw_{{ rgw_name }}.yml
+        owner: "{{ ceph_ssh_user }}"
+        group: "{{ ceph_ssh_user }}"
+        mode: '0644'
+      register: rgw_spec_file
+
+    # Применяем ТОЛЬКО если файл изменился
+    - name: Apply RGW spec
+      ansible.builtin.shell: >
+        cephadm shell -- ceph orch apply -i - < /tmp/rgw_{{ rgw_name }}.yml
+      register: rgw_apply
+      changed_when: false
+  when: inventory_hostname in groups['master']
+  become: true

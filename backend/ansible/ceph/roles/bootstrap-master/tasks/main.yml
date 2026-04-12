@@ -1,0 +1,64 @@
+---
+- name: Master bootstrap
+  block:
+    - name: Check if Docker is already installed
+      stat:
+        path: /usr/bin/docker
+      register: docker_check
+
+    - name: Install Docker
+      apt:
+        name: 
+          - docker.io
+          - chrony
+        state: present
+        update_cache: yes
+      when: not docker_check.stat.exists
+
+    - name: Enable and start Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Install base dependencies
+      apt:
+        name: [cephadm, ceph-common, openssh-server]
+        state: present
+        update_cache: yes
+
+    - name: Disable ipv6 on local ceph-master
+      command: >
+        sysctl -p
+
+    - name: Bootstrap Ceph cluster using cephadm
+      command: >
+        cephadm bootstrap
+        --mon-ip {{ ansible_host }}
+        --initial-dashboard-user {{ ceph_dashboard_user }}
+        --initial-dashboard-password {{ ceph_dashboard_password }}
+        --ssh-user {{ ceph_ssh_user }}
+      args:
+        creates: /etc/ceph/ceph.conf
+      register: ceph_bootstrap
+      retries: 5
+      delay: 10
+      until: ceph_bootstrap.rc == 0
+
+    - name: Get Ceph Public Key
+      command: ceph cephadm get-pub-key
+      register: ceph_pub_key
+      delegate_to: node-master
+      changed_when: false
+
+    - name: Save Ceph Public Key to file on Master
+      copy:
+        content: "{{ ceph_pub_key.stdout }}"
+        dest: "/etc/ceph/ceph.pub"
+        owner: "{{ ceph_ssh_user }}"
+        group: "{{ ceph_ssh_user }}"
+        mode: '0644'
+      delegate_to: node-master
+      run_once: true
+  when: inventory_hostname in groups['master']
+  become: true

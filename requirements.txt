@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+ansible>=9.0.0
+ansible-core>=2.14.13

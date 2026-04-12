@@ -1,0 +1,43 @@
+---
+- name: Prepare worker nodes for Ceph installation
+  block:
+    - name: Install dependencies
+      apt:
+        name:
+          - lvm2
+          - chrony
+          - gdisk
+          - curl
+          - docker.io
+        state: present
+        update_cache: yes
+
+    - name: Enable and start Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Ensure /dev/sdb is not mounted
+      shell: umount /dev/sdb* || true
+      ignore_errors: true
+
+    - name: Zap /dev/sdb using sgdisk
+      command: sgdisk --zap-all /dev/sdb
+      ignore_errors: true
+
+    - name: Wipe filesystem signatures from /dev/sdb
+      command: wipefs -a /dev/sdb
+      ignore_errors: true
+
+    - name: Overwrite beginning of /dev/sdb with zeros
+      command: dd if=/dev/zero of=/dev/sdb bs=1M count=100
+      ignore_errors: true
+
+    - name: Ensure chronyd is running and enabled
+      service:
+        name: chrony
+        state: started
+        enabled: yes
+  when: inventory_hostname in groups['workers']
+  become: true

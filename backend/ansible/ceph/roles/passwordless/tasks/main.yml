@@ -1,0 +1,7 @@
+- name: Allow passwordless sudo for admin
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/admin
+    content: "{{ ceph_ssh_user }} ALL=(ALL) NOPASSWD:ALL"
+    mode: '0440'
+    validate: '/usr/sbin/visudo -cf %s'
+  become: true

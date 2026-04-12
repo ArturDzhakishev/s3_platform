@@ -1,0 +1,11 @@
+---
+- name: Add hosts
+  block:
+    - name: Add each host entry if not already present
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ item }}"
+        state: present
+        create: yes
+        regexp: "^{{ item.split(' ')[0] }}\\s+{{ item.split(' ')[1] }}"
+      loop: "{{ ceph_hosts.split('\n') | select('match', '^[0-9]') | list }}"

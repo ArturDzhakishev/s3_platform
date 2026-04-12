@@ -1,0 +1,8 @@
+- name: Add hosts
+  block:
+    - name: Add each worker node to the Ceph orchestrator
+      command: >
+        cephadm shell -- ceph orch host add {{ hostvars[item]['ansible_hostname'] }} {{ hostvars[item]['ansible_host'] }}
+      loop: "{{ groups['workers'] }}"
+  when: inventory_hostname in groups['master']
+  become: true

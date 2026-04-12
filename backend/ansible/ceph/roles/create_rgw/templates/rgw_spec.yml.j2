@@ -1,0 +1,12 @@
+service_type: rgw
+service_id: {{ rgw_name }}
+
+placement:
+  hosts:
+{% for host in rgw_hosts %}
+    - {{ host }}
+{% endfor %}
+  count: {{ rgw_count }}
+
+spec:
+  rgw_frontend_port: {{ rgw_port }}

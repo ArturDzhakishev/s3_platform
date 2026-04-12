@@ -1,0 +1,55 @@
+- name: Add S3 user
+  block:
+    - name: Check if RGW user exists
+      ansible.builtin.command: >
+        cephadm shell -- radosgw-admin user info --uid={{ rgw_user_uid }}
+      register: rgw_user_info
+      failed_when: false
+      changed_when: false
+
+    # Если пользователь существует — парсим JSON
+    - name: Parse existing RGW user info
+      ansible.builtin.set_fact:
+        rgw_user_existing: "{{ rgw_user_info.stdout | from_json }}"
+      when: rgw_user_info.rc == 0
+
+    # Создание пользователя
+    - name: Create RGW user
+      ansible.builtin.command: >
+        cephadm shell -- radosgw-admin user create
+        --uid={{ rgw_user_uid }}
+        --display-name="{{ rgw_user_display_name }}"
+      when: rgw_user_info.rc != 0
+      changed_when: true
+      register: rgw_user_create
+
+    # Обновление display-name (если изменился)
+    - name: Update RGW user display name
+      ansible.builtin.command: >
+        cephadm shell -- radosgw-admin user modify
+        --uid={{ rgw_user_uid }}
+        --display-name="{{ rgw_user_display_name }}"
+      when:
+        - rgw_user_info.rc == 0
+        - rgw_user_existing.display_name != rgw_user_display_name
+      register: rgw_user_modify
+      changed_when: true
+
+    # Формируем единую переменную с данными пользователя
+    - name: Set RGW user data for file
+      ansible.builtin.set_fact:
+        rgw_user_data: >-
+          {{
+            (rgw_user_create.stdout | from_json)
+            if (rgw_user_create is defined and 'stdout' in rgw_user_create)
+            else rgw_user_existing
+          }}
+
+    - name: Save keys to file
+      ansible.builtin.copy:
+        content: "{{ rgw_user_data | to_nice_json }}"
+        dest: "/root/{{ rgw_user_uid }}_keys.json"
+        mode: '0600'
+
+  when: inventory_hostname in groups['master']
+  become: true
