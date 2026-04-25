@@ -1,0 +1,21 @@
+# Ceph Orchestrator bootstrap settings
+ceph_dashboard_user: user
+ceph_dashboard_password: user
+# ceph_cluster_network: 192.168.1.0/24
+ceph_ssh_user: user
+
+# SSH keys
+node_master_ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC2PhbXriWyFoY4L8eA8/NeAiwp6326vCZh0FWXKzqmm"
+ceph_pubkey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDGNsg8BzDAV9R7T5JsIk9COmJutQJI3W3KIb/iNbF88KDMbbcCyoi8dFUivF/pgMaomoyQXtzKReI6XZn/IjhHIg8LN4GjL5SqCOVuVPdGRzSNrG/LZt5sw0e89lIPEHdwTZbLLlRtto+/K5EBqWVUIf7pXGXCV/UqU7HmKFzDk9Zdvbn8BvRjPJaB5zY3zits9OLueEISce32txuWfLjQM09hqfSQxxE69+9QSQeJI91e862frjWSxppB61Y92kU7pe5tdwnOiZJMsrrW9syYpwpMIwpfdOa5MJkJRW45f34NH3vQz6WCIyoCqPL8Z4HKk72GUzHOT5hdGQZCImegvUCLwRNVuKyRW6QPbKrHJk/Q2u8ulDpx937C10QWImpEoCaQvZgG9fJR4tsxwfJfubl8aAy7o00J2vl7M9KeYxpvpHZYju1CgNjJVMgobzDDZXcOvUQDihyvSxRZcuciR+HTFQ4NDGsg9T7TTaFii0kjxG9KdW6wDWN7zIt0WB0= ceph-6664d9ea-2038-11f1-b047-080027970afe"
+
+# RGW
+rgw_name: s3-store
+rgw_port: 8080
+
+rgw_hosts:
+  - node-master
+
+rgw_count: 1
+
+rgw_user_uid: s3user4
+rgw_user_display_name: "S3 User4"

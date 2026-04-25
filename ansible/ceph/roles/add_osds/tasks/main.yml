@@ -1,0 +1,23 @@
+- name: Deploy OSDs across all workers
+  block:
+    - name: Create OSD spec file
+      copy:
+        dest: "/tmp/osd_spec.yml"
+        content: |
+          service_type: osd
+          service_id: all_sdb_disks
+          placement:
+            host_pattern: 'node-*'
+          data_devices:
+            paths:
+              - /dev/sdb
+      
+    - name: Apply OSD spec via orchestrator
+      command: >
+        cephadm shell 
+        --mount /tmp/osd_spec.yml:/tmp/osd_spec.yml
+        -- ceph orch apply -i /tmp/osd_spec.yml
+      register: orch_apply_result
+
+  when: inventory_hostname in groups['master']
+  become: true
