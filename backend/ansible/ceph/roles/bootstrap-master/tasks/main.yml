@@ -35,8 +35,7 @@
       command: >
         cephadm bootstrap
         --mon-ip {{ ansible_host }}
-        --initial-dashboard-user {{ ceph_dashboard_user }}
-        --initial-dashboard-password {{ ceph_dashboard_password }}
+        --skip-dashboard
         --ssh-user {{ ceph_ssh_user }}
       args:
         creates: /etc/ceph/ceph.conf
