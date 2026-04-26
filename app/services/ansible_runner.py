@@ -6,7 +6,19 @@ Ansible runner service — минимальная версия.
   2. ANSIBLE_INVENTORY_DEFAULT
   3. Динамический inventory, сгенерированный из hosts[] в запросе
 
-Точки расширения отмечены комментариями «# EXTEND:».
+Стратегия inventory (приоритет сверху вниз):
+  1. Файл из настроек движка (ANSIBLE_INVENTORY_CEPH / _SEAWEEDFS / _GARAGE)
+  2. ANSIBLE_INVENTORY_DEFAULT
+  3. Динамический inventory, сгенерированный из hosts[] в запросе
+
+Жизненный цикл задачи:
+  POST /run
+    → resolve_inventory()          — выбрать inventory
+    → create_job() в MongoDB       — статус: pending
+    → asyncio.create_task()        — 202 Accepted возвращается клиенту
+        → set_running()            — статус: running
+        → _run_playbook_sync()     — ansible-runner в thread pool
+        → set_finished()           — статус: success | failed
 """
 from __future__ import annotations
 
@@ -20,6 +32,9 @@ from typing import Any
 import ansible_runner
 
 from app.core.config import get_settings
+from app.schemas.enums import JobStatus, JobType, StorageEngine
+from app.services.job_store import create_job, set_finished, set_running
+
 
 log = logging.getLogger(__name__)
 settings = get_settings()
@@ -29,14 +44,14 @@ settings = get_settings()
 
 def build_inventory(hosts: list[dict]) -> dict:
     """
-    Строит in-memory inventory когда статический hosts.ini не задан.
+    Строит in-memory Ansible inventory из hosts[] запроса.
 
-    hosts — список dict: ip, ssh_user, ssh_port, role?, ssh_key_path?
-    Первый хост → master, остальные → workers (если role не указана явно).
+    Первый хост → группа master (MON/MGR для Ceph, master для SeaweedFS).
+    Остальные   → группа workers (OSD / volume-серверы).
+    Роль можно переопределить явно через поле role: "master" | "worker".
 
-    Группы master/workers и поле ansible_host обязательны для плейбуков,
-    которые используют groups['master'], groups['workers'] и
-    hostvars[item]['ansible_host'].
+    Группы master/workers используются в плейбуках через:
+      groups['master'][0], groups['workers'], hostvars[item]['ansible_host']
     """
     all_hosts: dict = {}
     master_hosts: dict = {}
@@ -135,23 +150,57 @@ def _run_playbook_sync(
     return r.rc, stdout
 
 
+# ── Фоновая корутина ──────────────────────────────────────────────────────────
+
+async def _background_run(
+    job_id: str,
+    playbook_path: str,
+    inventory: str | dict,
+    extra_vars: dict[str, Any],
+) -> None:
+    """
+    Запускается внутри asyncio.create_task() — клиент её не ждёт.
+
+    Обновляет статус Job в MongoDB на каждом шаге:
+      pending → running → success | failed
+    """
+    await set_running(job_id)
+    log.info("Job %s → running  playbook=%s  inventory=%s",
+             job_id, Path(playbook_path).name,
+             inventory if isinstance(inventory, str) else "dynamic")
+
+    runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
+    loop = asyncio.get_running_loop()
+
+    try:
+        rc, stdout = await loop.run_in_executor(
+            None,
+            _run_playbook_sync,
+            playbook_path,
+            inventory,
+            extra_vars,
+            runner_dir,
+        )
+    except Exception as exc:
+        log.exception("Job %s: ошибка runner", job_id)
+        await set_finished(job_id, rc=1, log=str(exc))
+        return
+
+    await set_finished(job_id, rc=rc, log=stdout)
+    log.info("Job %s → %s  rc=%d", job_id, "success" if rc == 0 else "failed", rc)
+
 # ── Public async API ──────────────────────────────────────────────────────────
 
-async def run_playbook(
+async def run_playbook_async(
     engine: str,
     job_type: str,
     hosts: list[dict],
     extra_vars: dict[str, Any],
-) -> tuple[int, str, str]:
-    """
-    Запускает плейбук асинхронно (в thread pool).
-    Возвращает (return_code, stdout_log, playbook_name).
-
-    EXTEND: при добавлении Celery — заменить run_in_executor на task.delay().
-    EXTEND: при добавлении БД — принимать job_id, обновлять Job.status.
-    """
+) -> str:
     playbook_name = f"{job_type}_{engine}.yml"
-    playbook_path = str(Path(settings.ANSIBLE_PLAYBOOKS_DIR, engine, playbook_name).resolve())
+    playbook_path = str(
+        Path(settings.ANSIBLE_PLAYBOOKS_DIR, engine, playbook_name).resolve()
+    )
 
     if not os.path.isfile(playbook_path):
         raise FileNotFoundError(
@@ -160,23 +209,22 @@ async def run_playbook(
         )
 
     inventory = resolve_inventory(engine, hosts)
-    runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, str(uuid.uuid4()))
 
-    log.info("Запуск %s | inventory: %s", playbook_name,
-             inventory if isinstance(inventory, str) else "dynamic")
-
-    loop = asyncio.get_running_loop()
-    rc, stdout = await loop.run_in_executor(
-        None,
-        _run_playbook_sync,
-        playbook_path,
-        inventory,
-        extra_vars,
-        runner_dir,
+    job_id = await create_job(
+        engine=engine,
+        job_type=job_type,
+        playbook=playbook_name,
+        hosts=hosts,
+        extra_vars=extra_vars,
     )
 
-    log.info("Плейбук %s завершён rc=%d", playbook_name, rc)
-    return rc, stdout, playbook_name
+    asyncio.create_task(
+        _background_run(job_id, playbook_path, inventory, extra_vars),
+        name=f"ansible-{job_id}",
+    )
+
+    log.info("Job %s создан: %s (%s)", job_id, playbook_name, engine)
+    return job_id
 
 
 async def ping_host(

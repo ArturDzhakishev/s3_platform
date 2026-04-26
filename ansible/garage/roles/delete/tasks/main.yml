@@ -1,0 +1,47 @@
+- name: Stop Garage service
+  systemd:
+    name: garage
+    state: stopped
+    enabled: no
+  ignore_errors: true
+
+- name: Remove systemd service file
+  file:
+    path: /etc/systemd/system/garage.service
+    state: absent
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Remove Garage binary
+  file:
+    path: /usr/local/bin/garage
+    state: absent
+
+- name: Remove Garage config
+  file:
+    path: /etc/garage.toml
+    state: absent
+
+- name: Remove Garage data directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ garage_meta_dir }}"
+    - "{{ garage_data_dir }}"
+
+- name: Remove Garage binary from control node
+  file:
+    path: "/tmp/garage_v{{ garage_version }}"
+    state: absent
+  delegate_to: localhost
+  run_once: true
+
+- name: Remove keys file from control node
+  file:
+    path: "./garage_keys.json"
+    state: absent
+  delegate_to: localhost
+  run_once: true

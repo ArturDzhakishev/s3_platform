@@ -62,11 +62,16 @@
   register: garage_key_output
   run_once: true
 
+- name: Get existing key info
+  command: garage key info api-key
+  register: garage_key_info
+  run_once: true
+  changed_when: false
 
 - name: Extract access key
   set_fact:
-    garage_access_key: "{{ garage_key_output.stdout | regex_search('Key ID: (.+)', '\\1') | first }}"
-    garage_secret_key: "{{ garage_key_output.stdout | regex_search('Secret key: (.+)', '\\1') | first }}"
+    garage_access_key: "{{ garage_key_info.stdout | regex_search('Key ID: (.+)', '\\1') | first }}"
+    garage_secret_key: "{{ garage_key_info.stdout | regex_search('Secret key: (.+)', '\\1') | first }}"
   run_once: true
 
 - name: Save keys as JSON
@@ -83,6 +88,9 @@
 
 - name: Create nextcloud bucket
   command: garage bucket create {{ name_bucket }}
+  register: bucket_create
+  failed_when: bucket_create.rc != 0 and 'already exists' not in bucket_create.stderr
+  changed_when: bucket_create.rc == 0
   run_once: true
 
 - name: Allow key access

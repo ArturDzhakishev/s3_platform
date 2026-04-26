@@ -1,29 +1,25 @@
 """
-Playbook endpoints — MVP без БД и Celery.
+Playbook endpoints — асинхронная версия с MongoDB.
 
-Три маршрута, покрывающие все типы задач из OpenAPI-спецификации:
-
-  POST /run          — запустить любой плейбук синхронно
-  POST /ping         — проверить SSH-доступность хоста
-  GET  /playbooks    — список доступных плейбуков
-
-EXTEND: при добавлении БД — каждый маршрут получает db: AsyncSession = Depends(get_db),
-        создаёт Job-запись и возвращает job_id вместо полного лога.
-EXTEND: при добавлении Celery — run_playbook() заменяется на task.delay(),
-        маршрут возвращает 202 Accepted + {job_id, celery_task_id}.
+Изменения по сравнению с MVP:
+  POST /run    → 202 Accepted + job_id  (раньше было 200 + полный лог)
+  GET  /jobs   → список задач из MongoDB
+  GET  /jobs/{job_id} → статус и лог конкретной задачи
 """
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.schemas.enums import JobStatus, JobType, StorageEngine
-from app.schemas.playbook import HostEntry, PlaybookResult, RunPlaybookRequest
-from app.services.ansible_runner import ping_host, run_playbook
+from app.schemas.job import JobAcceptedResponse, JobStatusResponse
+from app.schemas.playbook import HostEntry, RunPlaybookRequest
+from app.services.ansible_runner import ping_host, run_playbook_async
+from app.services.job_store import get_job, list_jobs
 
 router = APIRouter(tags=["playbooks"])
 settings = get_settings()
@@ -33,11 +29,12 @@ settings = get_settings()
 
 @router.post(
     "/run",
-    response_model=PlaybookResult,
-    summary="Запустить Ansible-плейбук",
+    response_model=JobAcceptedResponse,
+    status_code=202,
+    summary="Запустить плейбук асинхронно",
     description=(
-        "Синхронно выполняет плейбук и возвращает полный stdout. "
-        "Плейбук выбирается автоматически по схеме `{job_type}_{engine}.yml`."
+        "Создаёт Job в MongoDB, запускает плейбук в фоне и немедленно "
+        "возвращает job_id. Статус отслеживается через GET /api/v1/jobs/{job_id}."
     ),
 )
 async def run_playbook_endpoint(body: RunPlaybookRequest) -> PlaybookResult:
@@ -52,24 +49,28 @@ async def run_playbook_endpoint(body: RunPlaybookRequest) -> PlaybookResult:
     ]
 
     try:
-        rc, stdout, playbook_name = await run_playbook(
+        job_id = await run_playbook_async(
             engine=body.engine.value,
             job_type=body.job_type.value,
             hosts=hosts_payload,
             extra_vars=body.extra_vars,
         )
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail={"code": "PLAYBOOK_NOT_FOUND", "message": str(e)})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "PLAYBOOK_NOT_FOUND", "message": str(e)},
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"code": "RUNNER_ERROR", "message": str(e)})
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "RUNNER_ERROR", "message": str(e)},
+        )
 
-    return PlaybookResult(
-        job_type=body.job_type,
-        engine=body.engine,
-        status=JobStatus.success if rc == 0 else JobStatus.failed,
+    playbook_name = f"{body.job_type.value}_{body.engine.value}.yml"
+    return JobAcceptedResponse(
+        job_id=job_id,
+        status=JobStatus.pending,
         playbook=playbook_name,
-        log=stdout,
-        return_code=rc,
     )
 
 
@@ -83,6 +84,42 @@ class PingResponse(BaseModel):
     reachable: bool
     ping_ms: float | None = None
     error: str | None = None
+
+
+# ── GET /jobs ─────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/jobs",
+    summary="Список задач",
+    description="Последние 50 задач из MongoDB. Фильтр по статусу опционален.",
+)
+async def list_jobs_endpoint(
+    status: JobStatus | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    docs = await list_jobs(
+        status=status.value if status else None,
+        limit=limit,
+    )
+    return docs
+
+
+# ── GET /jobs/{job_id} ────────────────────────────────────────────────────────
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=JobStatusResponse,
+    summary="Статус задачи",
+    description="Возвращает текущий статус задачи и лог Ansible по job_id.",
+)
+async def get_job_endpoint(job_id: str) -> JobStatusResponse:
+    doc = await get_job(job_id)
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": f"Job {job_id} не найден"},
+        )
+    return JobStatusResponse(**doc)
 
 
 @router.post(

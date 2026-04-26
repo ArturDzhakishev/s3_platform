@@ -1,0 +1,7 @@
+---
+- name: Remove Garage cluster
+  hosts: garage
+  become: yes
+
+  roles:
+    - delete

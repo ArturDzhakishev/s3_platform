@@ -15,11 +15,9 @@ class Settings(BaseSettings):
     ANSIBLE_INVENTORY_SEAWEEDFS:  str | None = None   # ./ansible/seaweedfs/hosts.ini
     ANSIBLE_INVENTORY_GARAGE:     str | None = None   # ./ansible/garage/hosts.ini
 
-    # При добавлении БД — раскомментировать:
-    # DATABASE_URL: str = "postgresql+asyncpg://user:pass@localhost/s3platform"
-
-    # При добавлении Celery — раскомментировать:
-    # REDIS_URL: str = "redis://localhost:6379/0"
+    # MongoDB
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DB:  str = "s3platform"
 
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
