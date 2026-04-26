@@ -14,7 +14,9 @@ def deploy_ceph_task(cluster_id, data):
         data.ssh_key_path
     )
 
-    group_vars = 
+    group_vars = generate_group_vars(
+        
+    )
 
     run_ansible(
         data.type,

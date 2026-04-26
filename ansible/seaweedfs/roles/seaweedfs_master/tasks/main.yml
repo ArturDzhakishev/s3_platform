@@ -1,0 +1,13 @@
+- name: Create master service
+  template:
+    src: master.service.j2
+    dest: /etc/systemd/system/seaweed-master.service
+
+- name: Reload systemd
+  command: systemctl daemon-reexec
+
+- name: Enable and start master
+  systemd:
+    name: seaweed-master
+    enabled: yes
+    state: started

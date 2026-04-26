@@ -1,0 +1,19 @@
+seaweed_dir: /opt/seaweedfs
+seaweed_data_dir: /opt/seaweedfs/data
+
+
+master_port: 9333
+replication: 001
+
+volume_port: 8080
+filer_port: 8888
+s3_port: 8333
+
+seaweed_s3_filer_host: 192.168.1.111
+
+volume_max: 10
+
+nginx_s3_domain: "192.168.1.110"
+nginx_s3_backends:
+  - "192.168.1.111:8333"
+  - "192.168.1.112:8333"

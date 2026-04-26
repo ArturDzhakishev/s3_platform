@@ -1,0 +1,13 @@
+[Unit]
+Description=SeaweedFS Filer
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/weed filer \
+  -master={% for host in groups['seaweedfs'] %}{{ hostvars[host]['ansible_host'] }}:9333{% if not loop.last %},{% endif %}{% endfor %} \
+  -port={{ filer_port }}
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

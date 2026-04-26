@@ -1,0 +1,30 @@
+garage_version: "2.2.0"
+garage_rpc_port: 3901
+
+garage_meta_dir: /var/lib/garage/meta
+garage_data_dir: /var/lib/garage/data
+
+garage_replication_factor: 1
+
+garage_rpc_secret: "{{ lookup('password', 'secrets/garage_rpc_secret.txt length=64 chars=hexdigits') }}"
+garage_admin_token: "{{ lookup('password', 'secrets/garage_admin_token.txt length=32 chars=ascii_letters') }}"
+garage_metrics_token: "{{ lookup('password', 'secrets/garage_metrics_token.txt length=32 chars=ascii_letters') }}"
+
+garage_nodes_config:
+  node1:
+    zone: zone1
+    capacity: 2G
+
+  node2:
+    zone: zone1
+    capacity: 2G
+
+  node3:
+    zone: zone1
+    capacity: 2G
+
+  node4:
+    zone: zone1
+    capacity: 2G
+
+name_bucket: test

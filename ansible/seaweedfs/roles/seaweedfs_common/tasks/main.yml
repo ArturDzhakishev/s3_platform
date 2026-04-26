@@ -1,0 +1,49 @@
+- name: Check if SeaweedFS binary exists in /usr/local/bin
+  stat:
+    path: /usr/local/bin/weed
+  register: weed_bin
+
+- name: Create temporary directory for extraction
+  file:
+    path: /tmp/seaweed_extract
+    state: directory
+  when: not weed_bin.stat.exists
+
+- name: Download SeaweedFS
+  get_url:
+    url: https://github.com/seaweedfs/seaweedfs/releases/latest/download/linux_amd64.tar.gz
+    dest: /tmp/seaweedfs.tar.gz
+  when: not weed_bin.stat.exists
+
+- name: Extract SeaweedFS to temp folder
+  unarchive:
+    src: /tmp/seaweedfs.tar.gz
+    dest: /tmp/seaweed_extract
+    remote_src: yes
+  when: not weed_bin.stat.exists
+
+- name: Move binary to /usr/local/bin
+  copy:
+    src: /tmp/seaweed_extract/weed
+    dest: /usr/local/bin/weed
+    mode: '0755'
+    remote_src: yes
+  when: not weed_bin.stat.exists
+
+- name: Cleanup temporary files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/seaweedfs.tar.gz
+    - /tmp/seaweed_extract
+  when: not weed_bin.stat.exists
+
+- name: Create working directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ seaweed_dir }}"
+    - "{{ seaweed_data_dir }}"

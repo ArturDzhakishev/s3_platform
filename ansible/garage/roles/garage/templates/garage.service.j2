@@ -1,0 +1,11 @@
+[Unit]
+Description=Garage S3 Storage
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/garage server
+Restart=always
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=SeaweedFS Master
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/weed master \
+  -ip={{ ansible_host }} \
+  -port={{ master_port }} \
+  -peers={% for host in groups['seaweedfs'] %}{{ hostvars[host]['ansible_host'] }}:9333{% if not loop.last %},{% endif %}{% endfor %} \
+  -defaultReplication={{ replication }}
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

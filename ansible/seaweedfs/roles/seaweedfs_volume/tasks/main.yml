@@ -1,0 +1,13 @@
+- name: Create volume service
+  template:
+    src: volume.service.j2
+    dest: /etc/systemd/system/seaweed-volume.service
+
+- name: Reload systemd
+  command: systemctl daemon-reexec
+
+- name: Enable and start volume
+  systemd:
+    name: seaweed-volume
+    enabled: yes
+    state: started

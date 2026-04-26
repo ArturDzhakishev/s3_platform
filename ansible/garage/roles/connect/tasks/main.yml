@@ -1,0 +1,92 @@
+- name: Get node ID
+  command: garage node id
+  register: garage_node_id_raw
+  changed_when: false
+
+- name: Save node ID
+  set_fact:
+    garage_node_id: "{{ garage_node_id_raw.stdout }}"
+
+- name: Wait for all nodes
+  pause:
+    seconds: 5
+
+- name: Connect nodes
+  command: >
+    garage node connect {{ hostvars[item].garage_node_id }}
+  loop: "{{ groups['garage'] }}"
+  when: item != inventory_hostname
+  ignore_errors: true
+
+- name: Assign layout
+  command: >
+    garage layout assign
+    {{ hostvars[item].garage_node_id.split('@')[0] }}
+    -z {{ garage_nodes_config[item].zone }}
+    -c {{ garage_nodes_config[item].capacity }}
+    -t {{ item }}
+  loop: "{{ groups['garage'] }}"
+  run_once: true
+
+- name: Get layout status
+  command: garage layout show
+  register: garage_status
+  changed_when: false
+  run_once: true
+
+- name: Set layout versions
+  set_fact:
+    # Ищем текущую версию в тексте ответа и прибавляем 1
+    current_version: "{{ (garage_status.stdout | regex_search('Current cluster layout version: (\\d+)', '\\1') | default(['0'], true)) | first | int }}"
+    has_staged_changes: "{{ 'STAGED' in garage_status.stdout | upper }}"
+  run_once: true
+
+- name: Apply Garage layout
+  command: "garage layout apply --version {{ current_version + 1 }}"
+  run_once: true
+  when: has_staged_changes
+
+
+- name: Check existing keys
+  command: garage key list
+  register: key_list
+  changed_when: false
+  run_once: true
+  retries: 5
+  delay: 2
+  until: key_list.rc == 0
+
+- name: Create Garage API key
+  command: garage key create api-key
+  when: "'api-key' not in key_list.stdout"
+  register: garage_key_output
+  run_once: true
+
+
+- name: Extract access key
+  set_fact:
+    garage_access_key: "{{ garage_key_output.stdout | regex_search('Key ID: (.+)', '\\1') | first }}"
+    garage_secret_key: "{{ garage_key_output.stdout | regex_search('Secret key: (.+)', '\\1') | first }}"
+  run_once: true
+
+- name: Save keys as JSON
+  copy:
+    content: |
+      {
+        "access_key": "{{ garage_access_key }}",
+        "secret_key": "{{ garage_secret_key }}"
+      }
+    dest: "./garage_keys.json"
+    mode: '0600'
+  delegate_to: localhost
+  run_once: true
+
+- name: Create nextcloud bucket
+  command: garage bucket create {{ name_bucket }}
+  run_once: true
+
+- name: Allow key access
+  command: >
+    garage bucket allow --read --write --owner
+    {{ name_bucket }} --key api-key
+  run_once: true

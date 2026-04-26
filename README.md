@@ -2,6 +2,8 @@
 curl -X POST http://localhost:8000/ceph/deploy -H "Content-Type: application/json" -d '{"type": "ceph", "master_ip": "192.168.1.110", "nodes_ip":["192.168.1.112","192.168.1.113"]}'
 ```
 
+uvicorn app.main:app --reload
+
 
 curl -X POST http://localhost:8000/api/v1/run \
   -H "Content-Type: application/json" \
@@ -45,6 +47,27 @@ curl -X POST http://localhost:8000/api/v1/run \
   -H "Content-Type: application/json" \
   -d '{
     "engine":   "ceph",
+    "job_type": "deploy",
+    "extra_vars": {
+      "ceph_osd_pool_default_size": 3
+    }
+  }'
+
+
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "engine":   "seaweedfs",
+    "job_type": "deploy",
+    "extra_vars": {
+      "ceph_osd_pool_default_size": 3
+    }
+  }'
+
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "engine":   "garage",
     "job_type": "deploy",
     "extra_vars": {
       "ceph_osd_pool_default_size": 3

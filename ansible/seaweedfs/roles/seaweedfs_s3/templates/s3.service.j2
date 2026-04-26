@@ -1,0 +1,13 @@
+[Unit]
+Description=SeaweedFS S3 Gateway
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/weed s3 \
+  -filer={{ seaweed_s3_filer_host }}:{{ filer_port }} \
+  -port={{ s3_port }}
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

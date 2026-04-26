@@ -1,0 +1,13 @@
+- name: Create S3 service
+  template:
+    src: s3.service.j2
+    dest: /etc/systemd/system/seaweed-s3.service
+
+- name: Reload systemd
+  command: systemctl daemon-reexec
+
+- name: Enable and start S3
+  systemd:
+    name: seaweed-s3
+    enabled: yes
+    state: started

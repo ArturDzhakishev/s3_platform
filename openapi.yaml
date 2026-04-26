@@ -1,0 +1,636 @@
+openapi: 3.1.0
+
+info:
+  title: S3-Compatible Storage Platform API
+  version: 1.0.0
+  description: |
+    API для развёртывания и управления S3-совместимыми кластерами хранения данных
+    на базе открытого программного обеспечения (Ceph, SeaweedFS, Garage).
+    Оркестрация выполняется через Ansible под капотом.
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+
+tags:
+  - name: clusters
+    description: Управление кластерами хранилищ
+  - name: hosts
+    description: Управление хостами инвентаря
+  - name: jobs
+    description: Задачи деплоя (Ansible jobs)
+
+# ─────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────
+paths:
+
+  # ── Hosts (inventory) ──────────────────────
+  /hosts:
+    get:
+      tags: [hosts]
+      summary: Список хостов инвентаря
+      responses:
+        "200":
+          description: Массив хостов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Host"
+
+    post:
+      tags: [hosts]
+      summary: Добавить хост в инвентарь
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHostRequest"
+      responses:
+        "201":
+          description: Хост добавлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Host"
+        "409":
+          description: Хост с таким IP уже существует
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /hosts/{host_id}:
+    get:
+      tags: [hosts]
+      summary: Получить хост по ID
+      parameters:
+        - $ref: "#/components/parameters/HostId"
+      responses:
+        "200":
+          description: Хост
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Host"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [hosts]
+      summary: Обновить параметры хоста
+      parameters:
+        - $ref: "#/components/parameters/HostId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateHostRequest"
+      responses:
+        "200":
+          description: Хост обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Host"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [hosts]
+      summary: Удалить хост из инвентаря
+      parameters:
+        - $ref: "#/components/parameters/HostId"
+      responses:
+        "204":
+          description: Хост удалён
+        "409":
+          description: Хост используется в активном кластере
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /hosts/{host_id}/ping:
+    post:
+      tags: [hosts]
+      summary: Проверить доступность хоста по SSH (ansible ping)
+      parameters:
+        - $ref: "#/components/parameters/HostId"
+      responses:
+        "200":
+          description: Результат проверки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PingResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Clusters ───────────────────────────────
+  /clusters:
+    get:
+      tags: [clusters]
+      summary: Список всех кластеров
+      parameters:
+        - name: engine
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/StorageEngine"
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ClusterStatus"
+      responses:
+        "200":
+          description: Массив кластеров
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Cluster"
+
+    post:
+      tags: [clusters]
+      summary: Создать и развернуть кластер
+      description: |
+        Создаёт запись кластера и запускает Ansible playbook в фоне.
+        Возвращает кластер со статусом `deploying` и ссылкой на job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClusterRequest"
+      responses:
+        "202":
+          description: Деплой запущен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterWithJob"
+        "422":
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /clusters/{cluster_id}:
+    get:
+      tags: [clusters]
+      summary: Получить кластер по ID
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      responses:
+        "200":
+          description: Кластер
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cluster"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [clusters]
+      summary: Удалить кластер (teardown через Ansible)
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      responses:
+        "202":
+          description: Удаление запущено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "409":
+          description: Кластер уже удаляется
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /clusters/{cluster_id}/health:
+    get:
+      tags: [clusters]
+      summary: Состояние здоровья кластера
+      description: Возвращает актуальные метрики, собранные Monitoring service.
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      responses:
+        "200":
+          description: Health-метрики
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterHealth"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /clusters/{cluster_id}/scale:
+    post:
+      tags: [clusters]
+      summary: Масштабировать кластер
+      description: Добавляет или убирает ноды, запускает Ansible playbook в фоне.
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScaleRequest"
+      responses:
+        "202":
+          description: Масштабирование запущено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "409":
+          description: Кластер не в статусе ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /clusters/{cluster_id}/jobs:
+    get:
+      tags: [clusters, jobs]
+      summary: История Ansible-задач кластера
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      responses:
+        "200":
+          description: Список задач
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+
+  # ── Jobs ───────────────────────────────────
+  /jobs:
+    get:
+      tags: [jobs]
+      summary: Список всех задач
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/JobStatus"
+      responses:
+        "200":
+          description: Список задач
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+
+  /jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Получить задачу по ID (статус + лог)
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Задача с полным логом
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /jobs/{job_id}/log:
+    get:
+      tags: [jobs]
+      summary: Получить сырой лог Ansible (text/plain)
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Лог в виде текста
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+# ─────────────────────────────────────────────
+# COMPONENTS
+# ─────────────────────────────────────────────
+components:
+
+  parameters:
+    ClusterId:
+      name: cluster_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    HostId:
+      name: host_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+
+    # ── Enums ────────────────────────────────
+    StorageEngine:
+      type: string
+      enum: [ceph, seaweedfs, garage]
+      description: Тип S3-совместимого хранилища
+
+    ClusterStatus:
+      type: string
+      enum: [deploying, ready, scaling, deleting, failed]
+      description: |
+        - deploying  — первичный деплой запущен
+        - ready      — кластер работает
+        - scaling    — идёт масштабирование
+        - deleting   — идёт удаление
+        - failed     — последняя операция завершилась с ошибкой
+
+    JobStatus:
+      type: string
+      enum: [pending, running, success, failed]
+
+    JobType:
+      type: string
+      enum: [deploy, scale, teardown]
+
+    HostStatus:
+      type: string
+      enum: [available, in_use, unreachable]
+
+    # ── Host schemas ─────────────────────────
+    Host:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+          example: "node-01"
+        ip:
+          type: string
+          format: ipv4
+          example: "192.168.1.10"
+        ssh_user:
+          type: string
+          example: "ubuntu"
+        ssh_port:
+          type: integer
+          default: 22
+        status:
+          $ref: "#/components/schemas/HostStatus"
+        cluster_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID кластера, к которому привязан хост (если есть)
+        created_at:
+          type: string
+          format: date-time
+
+    CreateHostRequest:
+      type: object
+      required: [label, ip, ssh_user]
+      properties:
+        label:
+          type: string
+          example: "node-01"
+        ip:
+          type: string
+          format: ipv4
+          example: "192.168.1.10"
+        ssh_user:
+          type: string
+          example: "ubuntu"
+        ssh_port:
+          type: integer
+          default: 22
+        ssh_private_key:
+          type: string
+          description: Приватный SSH-ключ (PEM). Хранится зашифрованным.
+          example: "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+
+    UpdateHostRequest:
+      type: object
+      properties:
+        label:
+          type: string
+        ssh_user:
+          type: string
+        ssh_port:
+          type: integer
+        ssh_private_key:
+          type: string
+
+    PingResult:
+      type: object
+      properties:
+        host_id:
+          type: string
+          format: uuid
+        reachable:
+          type: boolean
+        ping_ms:
+          type: number
+          nullable: true
+        error:
+          type: string
+          nullable: true
+
+    # ── Cluster schemas ──────────────────────
+    Cluster:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "prod-ceph-01"
+        engine:
+          $ref: "#/components/schemas/StorageEngine"
+        status:
+          $ref: "#/components/schemas/ClusterStatus"
+        node_count:
+          type: integer
+          example: 3
+        host_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        extra_vars:
+          type: object
+          additionalProperties: true
+          description: Дополнительные переменные, переданные в Ansible playbook
+          example:
+            ceph_osd_pool_default_size: 3
+            seaweedfs_volume_size_limit_mb: 30000
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateClusterRequest:
+      type: object
+      required: [name, engine, host_ids]
+      properties:
+        name:
+          type: string
+          example: "prod-ceph-01"
+        engine:
+          $ref: "#/components/schemas/StorageEngine"
+        host_ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+          description: ID хостов из инвентаря для этого кластера
+        extra_vars:
+          type: object
+          additionalProperties: true
+          description: Переменные для Ansible playbook (engine-specific)
+          example:
+            ceph_osd_pool_default_size: 3
+
+    ClusterWithJob:
+      allOf:
+        - $ref: "#/components/schemas/Cluster"
+        - type: object
+          properties:
+            job:
+              $ref: "#/components/schemas/Job"
+
+    ClusterHealth:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+          format: uuid
+        health:
+          type: string
+          enum: [healthy, degraded, unhealthy, unknown]
+        nodes_total:
+          type: integer
+        nodes_ready:
+          type: integer
+        used_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        total_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        checked_at:
+          type: string
+          format: date-time
+
+    ScaleRequest:
+      type: object
+      required: [host_ids]
+      properties:
+        host_ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+          description: Новый полный список хостов кластера
+
+    # ── Job schemas ──────────────────────────
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        cluster_id:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/JobType"
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    JobDetail:
+      allOf:
+        - $ref: "#/components/schemas/Job"
+        - type: object
+          properties:
+            log:
+              type: string
+              description: Полный stdout ansible-runner
+              example: "PLAY [Deploy Ceph cluster] *****\n..."
+
+    # ── Error ────────────────────────────────
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: "CLUSTER_NOT_FOUND"
+        message:
+          type: string
+          example: "Cluster with id '...' not found"
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true

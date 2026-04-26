@@ -1,0 +1,13 @@
+- name: Create filer service
+  template:
+    src: filer.service.j2
+    dest: /etc/systemd/system/seaweed-filer.service
+
+- name: Reload systemd
+  command: systemctl daemon-reexec
+
+- name: Enable and start filer
+  systemd:
+    name: seaweed-filer
+    enabled: yes
+    state: started

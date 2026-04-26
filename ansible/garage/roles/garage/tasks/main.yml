@@ -1,0 +1,60 @@
+- name: Install dependencies
+  apt:
+    name:
+      - wget
+    update_cache: yes
+
+# - name: Download Garage binary
+#   get_url:
+#     url: "https://garagehq.deuxfleurs.fr/_releases/v{{ garage_version }}/x86_64-unknown-linux-musl/garage"
+#     dest: /usr/local/bin/garage
+#     mode: '0755'
+
+- name: Download Garage binary to control node
+  get_url:
+    url: "https://garagehq.deuxfleurs.fr/_releases/v{{ garage_version }}/x86_64-unknown-linux-musl/garage"
+    dest: "/tmp/garage_v{{ garage_version }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Propagate Garage binary to nodes
+  copy:
+    src: "/tmp/garage_v{{ garage_version }}"
+    dest: /usr/local/bin/garage
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ garage_meta_dir }}"
+    - "{{ garage_data_dir }}"
+
+- name: Generate config
+  template:
+    src: garage.toml.j2
+    dest: /etc/garage.toml
+
+- name: Create systemd service
+  template:
+    src: garage.service.j2
+    dest: /etc/systemd/system/garage.service
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start Garage
+  systemd:
+    name: garage
+    enabled: yes
+    state: started
+
+- name: Wait for Garage
+  wait_for:
+    port: 3901
+    timeout: 30
