@@ -20,4 +20,15 @@ class JobType(str, Enum):
     teardown = "teardown"
 
 
-# При добавлении БД — добавить ClusterStatus, HostStatus сюда же.
+class ClusterStatus(str, Enum):
+    deploying = "deploying"
+    ready = "ready"
+    scaling = "scaling"
+    deleting = "deleting"
+    failed = "failed"
+
+
+class HostStatus(str, Enum):
+    available = "available"
+    in_use = "in_use"
+    unreachable = "unreachable"
