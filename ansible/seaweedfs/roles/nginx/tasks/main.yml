@@ -1,3 +1,20 @@
+- name: Create nginx config dir before install
+  ansible.builtin.file:
+    path: /etc/nginx/sites-available
+    state: directory
+    mode: '0755'
+
+- name: Pre-deploy default site without IPv6
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 80 default_server;
+          root /var/www/html;
+          server_name _;
+      }
+    mode: '0644'
+
 - name: Install Nginx
   ansible.builtin.apt:
     name: nginx

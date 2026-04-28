@@ -1,24 +1,6 @@
 """
-Ansible runner service — минимальная версия.
+Ansible runner service.
 
-Стратегия inventory (приоритет сверху вниз):
-  1. Файл из настроек движка  (ANSIBLE_INVENTORY_CEPH / _SEAWEEDFS / _GARAGE)
-  2. ANSIBLE_INVENTORY_DEFAULT
-  3. Динамический inventory, сгенерированный из hosts[] в запросе
-
-Стратегия inventory (приоритет сверху вниз):
-  1. Файл из настроек движка (ANSIBLE_INVENTORY_CEPH / _SEAWEEDFS / _GARAGE)
-  2. ANSIBLE_INVENTORY_DEFAULT
-  3. Динамический inventory, сгенерированный из hosts[] в запросе
-
-Жизненный цикл задачи:
-  POST /run
-    → resolve_inventory()          — выбрать inventory
-    → create_job() в MongoDB       — статус: pending
-    → asyncio.create_task()        — 202 Accepted возвращается клиенту
-        → set_running()            — статус: running
-        → _run_playbook_sync()     — ansible-runner в thread pool
-        → set_finished()           — статус: success | failed
 При deploy записывает данные в три коллекции MongoDB:
 
   hosts    ← upsert каждого хоста (ip уникален), статус → in_use
@@ -30,6 +12,7 @@ Ansible runner service — минимальная версия.
   clusters ← status (ready / failed), s3_endpoint, error_msg
   hosts    ← (при teardown) status → available, cluster_id → None
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,6 +20,7 @@ import logging
 import os
 import time
 import uuid
+import functools
 from pathlib import Path
 from typing import Any
 
@@ -55,21 +39,103 @@ log = logging.getLogger(__name__)
 settings = get_settings()
 
 
-# ── Dynamic inventory builder ─────────────────────────────────────────────────
+# ── Inventory ─────────────────────────────────────────────────────────────────
 
-def build_inventory(hosts: list[dict]) -> dict:
-    all_h: dict = {}
-    masters: dict = {}
-    workers: dict = {}
-    for i, h in enumerate(hosts):
-        ip = h["ip"]
-        entry: dict = {"ansible_host": ip, "ansible_user": h["ssh_user"], "ansible_port": h["ssh_port"]}
-        if h.get("ssh_private_key_path"):
-            entry["ansible_ssh_private_key_file"] = h["ssh_private_key_path"]
-        all_h[ip] = entry
-        role = h.get("role", "master" if i == 0 else "worker")
-        (masters if role == "master" else workers)[ip] = {}
-    return {"all": {"hosts": all_h, "children": {"master": {"hosts": masters}, "workers": {"hosts": workers}}}}
+def build_inventory(hosts: list[dict], engine: str = "", runner_dir: str = "") -> str:
+    """
+    Генерирует hosts.ini точно по формату каждого движка.
+
+    ceph:
+        [master]
+        node-master ansible_host=192.168.1.110
+        [workers]
+        node-02 ansible_host=192.168.1.112
+        node-03 ansible_host=192.168.1.113
+
+    seaweedfs:
+        [seaweedfs]
+        node1 ansible_host=192.168.1.110
+        ...
+        [s3]
+        node1 ansible_host=192.168.1.110
+        node2 ansible_host=192.168.1.112
+        [loadbalancer]
+        node1 ansible_host=192.168.1.110
+
+    garage:
+        [garage]
+        node1 ansible_host=192.168.1.112
+        node2 ansible_host=192.168.1.113
+        node3 ansible_host=192.168.1.110
+    """
+    master_h  = next((h for h in hosts if h.get("role") == "master"), hosts[0])
+    master_ip = master_h["ip"]
+    worker_hs = [h for h in hosts if h["ip"] != master_ip]
+    all_ips   = [h["ip"] for h in hosts]
+    # s3 — все ноды кроме последней worker (первые две из трёх)
+    s3_ips    = all_ips[:-1] if len(all_ips) > 1 else all_ips
+
+    def host_line(name: str, ip: str) -> str:
+        return f"{name} ansible_host={ip}"
+
+    if engine == "ceph":
+        # имена нод берём из label хоста
+        master_name = master_h.get("label", "node-master")
+        lines = [
+            "[master]",
+            host_line(master_name, master_ip),
+            "[workers]",
+        ]
+        for h in worker_hs:
+            lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
+        groups_ini = "\n".join(lines)
+
+    elif engine == "seaweedfs":
+        # имена node1, node2, node3 в порядке передачи
+        names = {h["ip"]: f"node{i}" for i, h in enumerate(hosts, start=1)}
+        lines = ["[seaweedfs]"]
+        for ip in all_ips:
+            lines.append(host_line(names[ip], ip))
+        lines.append("[s3]")
+        for ip in s3_ips:
+            lines.append(host_line(names[ip], ip))
+        lines += ["[loadbalancer]", host_line(names[master_ip], master_ip)]
+        groups_ini = "\n".join(lines)
+
+    elif engine == "garage":
+        # все ноды как node1..N, master последний (как в примере)
+        ordered = worker_hs + [master_h]
+        names   = {h["ip"]: f"node{i}" for i, h in enumerate(ordered, start=1)}
+        lines   = ["[garage]"]
+        for h in ordered:
+            lines.append(host_line(names[h["ip"]], h["ip"]))
+        groups_ini = "\n".join(lines)
+
+    else:
+        master_name = master_h.get("label", "node-master")
+        lines = ["[master]", host_line(master_name, master_ip), "[workers]"]
+        for h in worker_hs:
+            lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
+        groups_ini = "\n".join(lines)
+
+    first = hosts[0]
+    vars_lines = [
+        "[all:vars]",
+        f"ansible_user={first['ssh_user']}",
+        f"ansible_python_interpreter=/usr/bin/python3",
+    ]
+    if first.get("ssh_private_key_path"):
+        vars_lines.append(f"ansible_ssh_private_key_file={first['ssh_private_key_path']}")
+
+    ini = groups_ini + "\n" + "\n".join(vars_lines) + "\n"
+
+    inv_dir = Path(runner_dir) / "inventory"
+    inv_dir.mkdir(parents=True, exist_ok=True)
+    inv_path = inv_dir / "hosts.ini"
+    inv_path.write_text(ini)
+    log.debug("Inventory:\n%s", ini)
+    return str(inv_path)
+
 
 def _s3_endpoint(engine: str, hosts: list[dict]) -> str | None:
     master_ip = next(
@@ -84,13 +150,20 @@ def _s3_endpoint(engine: str, hosts: list[dict]) -> str | None:
 
 # ── Sync runner (thread pool) ─────────────────────────────────────────────────
 
-def _run_sync(playbook_path: str, inventory: str | dict, extra_vars: dict, runner_dir: str) -> tuple[int, str]:
+def _run_sync(
+    playbook_path: str,
+    inventory:     str | dict,
+    runner_dir:    str,
+) -> tuple[int, str]:
+    """
+    Запускает плейбук синхронно (вызывается из thread pool).
+    extra_vars передаются через extravars ansible-runner.
+    """
     Path(runner_dir).mkdir(parents=True, exist_ok=True)
     r = ansible_runner.run(
         private_data_dir=runner_dir,
         playbook=str(Path(playbook_path).resolve()),
         inventory=inventory,
-        extravars=extra_vars,
         quiet=False,
     )
     return r.rc, (r.stdout.read() if r.stdout else "")
@@ -155,16 +228,15 @@ async def run_deploy_async(
         extra_vars=extra_vars,
     )
 
-    inventory = build_inventory(hosts)
-
     # ── 4. фон ───────────────────────────────────────────────────────────────
     async def _bg() -> None:
         await set_running(job_id)
         log.info("Deploy %s → running  cluster=%s", job_id, cluster_id)
         runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
+        inventory  = build_inventory(hosts, engine=engine, runner_dir=runner_dir)
         loop = asyncio.get_running_loop()
         try:
-            rc, stdout = await loop.run_in_executor(None, _run_sync, pb_path, inventory, extra_vars, runner_dir)
+            rc, stdout = await loop.run_in_executor(None, functools.partial(_run_sync, pb_path, inventory, runner_dir))
         except Exception as exc:
             log.exception("Deploy %s: ошибка runner", job_id)
             await set_finished(job_id, rc=1, log=str(exc))
