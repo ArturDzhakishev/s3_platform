@@ -1,0 +1,43 @@
+- name: Stop seaweed-s3 service
+  ansible.builtin.systemd:
+    name: seaweed-s3
+    state: stopped
+  ignore_errors: true
+
+- name: Disable seaweed-s3 service
+  ansible.builtin.systemd:
+    name: seaweed-s3
+    enabled: false
+  ignore_errors: true
+
+- name: Kill any remaining 'weed s3' processes
+  # Точное совпадение с ExecStart: /usr/local/bin/weed s3 ...
+  ansible.builtin.shell: |
+    pkill -9 -f "/usr/local/bin/weed s3" || true
+    pkill -9 -f "weed s3" || true
+  ignore_errors: true
+  changed_when: false
+
+- name: Verify seaweed-s3 unit file exists before removal
+  ansible.builtin.stat:
+    path: /etc/systemd/system/seaweed-s3.service
+  register: s3_unit_stat
+
+- name: Remove seaweed-s3 systemd unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/seaweed-s3.service
+    state: absent
+  when: s3_unit_stat.stat.exists
+
+- name: Reload systemd daemon after S3 unit removal
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Reset failed state for seaweed-s3 (if any)
+  ansible.builtin.command: systemctl reset-failed seaweed-s3
+  ignore_errors: true
+  changed_when: false
+
+- name: SeaweedFS S3 removal complete
+  ansible.builtin.debug:
+    msg: "SeaweedFS S3 (seaweed-s3.service) successfully removed from {{ inventory_hostname }}"

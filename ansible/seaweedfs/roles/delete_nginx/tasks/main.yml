@@ -1,0 +1,45 @@
+- name: Stop nginx service
+  ansible.builtin.service:
+    name: nginx
+    state: stopped
+  ignore_errors: true
+
+- name: Disable nginx service
+  ansible.builtin.service:
+    name: nginx
+    enabled: false
+  ignore_errors: true
+
+- name: Kill any remaining nginx processes
+  ansible.builtin.command: pkill -9 nginx
+  ignore_errors: true
+  changed_when: false
+
+- name: Remove nginx package with purge
+  ansible.builtin.apt:
+    name: nginx
+    state: absent
+    purge: true
+    autoremove: true
+
+- name: Remove residual nginx directories left after purge
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/nginx
+    - /var/log/nginx
+    - /var/www/html
+
+- name: Remove nginx logrotate config
+  ansible.builtin.file:
+    path: /etc/logrotate.d/nginx
+    state: absent
+
+- name: Reload systemd daemon after nginx removal
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Nginx removal complete
+  ansible.builtin.debug:
+    msg: "Nginx (+ seaweedfs-s3.conf symlink/config + default) removed from {{ inventory_hostname }}"

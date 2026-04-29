@@ -1,0 +1,108 @@
+- name: Stop seaweed-master service
+  ansible.builtin.systemd:
+    name: seaweed-master
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Stop seaweed-volume service
+  ansible.builtin.systemd:
+    name: seaweed-volume
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Stop seaweed-filer service
+  ansible.builtin.systemd:
+    name: seaweed-filer
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Stop seaweed-s3 service 
+  ansible.builtin.systemd:
+    name: seaweed-s3
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Kill any surviving weed processes
+  ansible.builtin.shell: |
+    pkill -9 -f "/usr/local/bin/weed" || true
+  changed_when: false
+  ignore_errors: true
+
+- name: Verify no weed processes remain
+  ansible.builtin.shell: |
+    pgrep -a weed || echo "OK: no weed processes"
+  register: weed_procs
+  changed_when: false
+
+- name: Show process check result
+  ansible.builtin.debug:
+    msg: "{{ weed_procs.stdout_lines }}"
+
+# --- 3.2 Удаление systemd unit-файлов ------------------------------------
+
+- name: Remove seaweed-master unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/seaweed-master.service
+    state: absent
+
+- name: Remove seaweed-volume unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/seaweed-volume.service
+    state: absent
+
+- name: Remove seaweed-filer unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/seaweed-filer.service
+    state: absent
+
+- name: Remove seaweed-s3 unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/seaweed-s3.service
+    state: absent
+
+- name: Reload systemd daemon after unit file removal
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Reset failed systemd state for all seaweed-* units
+  ansible.builtin.command: systemctl reset-failed
+  changed_when: false
+  ignore_errors: true
+
+# --- 3.3 Удаление рабочих директорий -------------------------------------
+
+- name: Remove seaweed working directory (seaweed_dir)
+  ansible.builtin.file:
+    path: "{{ seaweed_dir }}"
+    state: absent
+
+- name: Remove seaweed data directory (seaweed_data_dir)
+  ansible.builtin.file:
+    path: "{{ seaweed_data_dir }}"
+    state: absent
+
+# --- 3.4 Удаление бинарника ----------------------------------------------
+
+- name: Remove weed binary from /usr/local/bin
+  ansible.builtin.file:
+    path: /usr/local/bin/weed
+    state: absent
+
+- name: if cleanup was skipped on error
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/seaweedfs.tar.gz
+    - /tmp/seaweed_extract
+
+- name: SeaweedFS removal complete
+  ansible.builtin.debug:
+    msg: >-
+      SeaweedFS removed from {{ inventory_hostname }}:
+      unit files deleted, seaweed_dir={{ seaweed_dir }},
+      seaweed_data_dir={{ seaweed_data_dir }}, binary /usr/local/bin/weed deleted
