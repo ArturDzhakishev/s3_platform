@@ -1,8 +1,19 @@
+# - name: Disable unattended upgrades
+#   systemd:
+#     name: unattended-upgrades
+#     state: stopped
+#     enabled: no
+#   ignore_errors: true
+
 - name: Install dependencies
   apt:
     name:
       - wget
     update_cache: yes
+  # register: apt_result
+  # retries: 10
+  # delay: 10
+  # until: apt_result is succeeded
 
 # - name: Download Garage binary
 #   get_url:

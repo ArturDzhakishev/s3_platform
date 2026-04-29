@@ -46,7 +46,7 @@ curl -s -X POST http://localhost:8000/api/v1/clusters \
         "ceph_rgw_enable": true
     }
 }' | jq .
-
+<!-- -----------------SEAWEDFS------------- -->
 curl -s -X POST http://localhost:8000/api/v1/clusters \
   -H "Content-Type: application/json" \
   -d '{
@@ -84,8 +84,53 @@ curl -s -X POST http://localhost:8000/api/v1/clusters \
         "seaweedfs_volume_size_limit_mb": 30000
     }
 }' | jq .
+<!-- -----------------Garage------------- -->
+curl -s -X POST http://localhost:8000/api/v1/clusters \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "prod-garage-01",
+    "engine": "garage",
+    "hosts": [
+        {
+            "label": "node-master",
+            "ip": "192.168.1.110",
+            "ssh_user": "user",
+            "ssh_port": 22,
+            "ssh_private_key_path": "/home/user/.ssh/ceph"
+        },
+        {
+            "label": "node-02",
+            "ip": "192.168.1.112",
+            "ssh_user": "user",
+            "ssh_port": 22,
+            "ssh_private_key_path": "/home/user/.ssh/ceph"
+        },
+        {
+            "label": "node-03",
+            "ip": "192.168.1.113",
+            "ssh_user": "user",
+            "ssh_port": 22,
+            "ssh_private_key_path": "/home/user/.ssh/ceph"
+        }
+    ],
+    "extra_vars": {
+        "garage_version": "1.0.0",
+        "garage_replication_factor": 3,
+        "garage_s3_port": 3900,
+        "garage_admin_port": 3903,
+        "garage_rpc_port": 3901
+    }
+}' | jq .
 
 <!-- GET -->
 <!-- All clusters -->
 
 curl -s http://localhost:8000/api/v1/clusters | jq .
+
+
+<!-- job_id status -->
+curl -s http://localhost:8000/api/v1/jobs/jobs_id | jq .
+
+<!-- DELETE -->
+curl -s -X DELETE \
+  http://localhost:8000/api/v1/clusters/$CLUSTER_ID | jq .

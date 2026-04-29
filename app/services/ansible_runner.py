@@ -12,7 +12,6 @@ Ansible runner service.
   clusters ← status (ready / failed), s3_endpoint, error_msg
   hosts    ← (при teardown) status → available, cluster_id → None
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -154,6 +153,7 @@ def _run_sync(
     playbook_path: str,
     inventory:     str | dict,
     runner_dir:    str,
+    extra_vars:    dict | None = None,
 ) -> tuple[int, str]:
     """
     Запускает плейбук синхронно (вызывается из thread pool).
@@ -164,6 +164,7 @@ def _run_sync(
         private_data_dir=runner_dir,
         playbook=str(Path(playbook_path).resolve()),
         inventory=inventory,
+        extravars=extra_vars or {},
         quiet=False,
     )
     return r.rc, (r.stdout.read() if r.stdout else "")
@@ -236,7 +237,7 @@ async def run_deploy_async(
         inventory  = build_inventory(hosts, engine=engine, runner_dir=runner_dir)
         loop = asyncio.get_running_loop()
         try:
-            rc, stdout = await loop.run_in_executor(None, functools.partial(_run_sync, pb_path, inventory, runner_dir))
+            rc, stdout = await loop.run_in_executor(None, functools.partial(_run_sync, pb_path, inventory, runner_dir, extra_vars))
         except Exception as exc:
             log.exception("Deploy %s: ошибка runner", job_id)
             await set_finished(job_id, rc=1, log=str(exc))
@@ -268,15 +269,18 @@ async def run_teardown_async(cluster_id: str, engine: str, hosts: list[dict], ex
         playbook=pb_name,
         extra_vars=extra_vars,
     )
-    inventory = build_inventory(hosts)
 
     async def _bg() -> None:
         await set_running(job_id)
         await set_cluster_status(cluster_id, ClusterStatus.deleting)
         runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
+        inventory = build_inventory(hosts, engine=engine, runner_dir=runner_dir)
         loop = asyncio.get_running_loop()
         try:
-            rc, stdout = await loop.run_in_executor(None, _run_sync, pb_path, inventory, extra_vars, runner_dir)
+            rc, stdout = await loop.run_in_executor(
+                None,
+                functools.partial(_run_sync, pb_path, inventory, runner_dir, extra_vars),
+            )
         except Exception as exc:
             await set_finished(job_id, rc=1, log=str(exc))
             await set_cluster_status(cluster_id, ClusterStatus.failed, error_msg=str(exc))
