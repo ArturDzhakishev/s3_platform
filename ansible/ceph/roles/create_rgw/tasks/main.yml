@@ -15,5 +15,23 @@
         cephadm shell -- ceph orch apply -i - < /tmp/rgw_{{ rgw_name }}.yml
       register: rgw_apply
       changed_when: false
+
+    - name: Wait for Ceph cluster healthy before adding S3 user
+      command: ceph health
+      register: ceph_health
+      until: "'HEALTH_OK' in ceph_health.stdout"
+      retries: 30      # ждать до 10 минут
+      delay: 20
+      changed_when: false
+      delegate_to: node-master
+
+    - name: Wait for RGW daemon to be running
+      command: ceph orch ps --daemon-type rgw
+      register: rgw_check
+      until: "'running' in rgw_check.stdout"
+      retries: 20
+      delay: 15
+      changed_when: false
+      delegate_to: node-master
   when: inventory_hostname in groups['master']
   become: true

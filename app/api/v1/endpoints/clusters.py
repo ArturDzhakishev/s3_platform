@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from app.schemas.enums import ClusterStatus, StorageEngine
 from app.schemas.cluster import ClusterResponse
 from app.schemas.job import JobAcceptedResponse
-from app.services.ansible_runner import run_deploy_async, run_teardown_async
+from app.services.ansible_runner import run_deploy_async, run_teardown_async, run_scale_async
 from app.services.cluster_store import get_cluster, list_clusters
 from app.services.job_store import list_jobs
 from app.schemas.enums import JobStatus
@@ -37,6 +37,13 @@ class CreateClusterRequest(BaseModel):
     hosts:      list[HostIn]    = Field(..., min_length=1)
     extra_vars: dict[str, Any]  = Field(default_factory=dict)
 
+class ScaleRequest(BaseModel):
+    """
+    Только новые ноды для добавления.
+    Бэкенд сам достаёт существующие ноды кластера из MongoDB
+    и объединяет со списком новых.
+    """
+    new_hosts: list[HostIn] = Field(..., min_length=1)
 
 # ── POST /clusters ────────────────────────────────────────────────────────────
 
@@ -66,6 +73,73 @@ async def create_cluster(body: CreateClusterRequest):
         playbook=f"deploy_{body.engine.value}.yml",
     )
 
+# ── POST /clusters/{cluster_id}/scale ─────────────────────────────────────────
+
+@router.post("/{cluster_id}/scale", status_code=202)
+async def scale_cluster(cluster_id: str, body: ScaleRequest):
+    doc = await get_cluster(cluster_id)
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": f"Кластер {cluster_id} не найден"},
+        )
+
+    # 409 — кластер должен быть в статусе ready
+    if doc["status"] != ClusterStatus.ready.value:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CLUSTER_NOT_READY",
+                "message": f"Масштабирование возможно только в статусе ready, сейчас: {doc['status']}",
+            },
+        )
+
+    # Достать существующие ноды кластера из MongoDB
+    from app.services.host_store import list_hosts
+    existing_hosts = await list_hosts(cluster_id=cluster_id)
+
+    # Проверить что новые ноды не дублируют существующие по IP
+    existing_ips = {h["ip"] for h in existing_hosts}
+    new_hosts_payload = [h.model_dump() for h in body.new_hosts]
+    duplicates = [h["ip"] for h in new_hosts_payload if h["ip"] in existing_ips]
+    if duplicates:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_ALREADY_IN_CLUSTER",
+                "message": f"Хосты уже в кластере: {', '.join(duplicates)}",
+            },
+        )
+
+    # Объединить: старые ноды + новые
+    all_hosts = existing_hosts + new_hosts_payload
+
+    try:
+        job_id = await run_scale_async(
+            cluster_id=cluster_id,
+            engine=doc["engine"],
+            hosts=all_hosts,           # все ноды для инвентаря
+            new_hosts=new_hosts_payload,  # только новые — для when: в плейбуке
+            extra_vars=doc.get("extra_vars", {}),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "PLAYBOOK_NOT_FOUND", "message": str(e)},
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ERROR", "message": str(e)},
+        )
+
+    return {
+        "job_id":     job_id,
+        "cluster_id": cluster_id,
+        "status":     "pending",
+        "playbook":   f"scale_{doc['engine']}.yml",
+        "message":    "Масштабирование запущено",
+    }
 
 # ── GET /clusters ─────────────────────────────────────────────────────────────
 

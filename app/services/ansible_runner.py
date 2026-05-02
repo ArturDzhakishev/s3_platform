@@ -40,57 +40,35 @@ settings = get_settings()
 
 # ── Inventory ─────────────────────────────────────────────────────────────────
 
-def build_inventory(hosts: list[dict], engine: str = "", runner_dir: str = "") -> str:
-    """
-    Генерирует hosts.ini точно по формату каждого движка.
-
-    ceph:
-        [master]
-        node-master ansible_host=192.168.1.110
-        [workers]
-        node-02 ansible_host=192.168.1.112
-        node-03 ansible_host=192.168.1.113
-
-    seaweedfs:
-        [seaweedfs]
-        node1 ansible_host=192.168.1.110
-        ...
-        [s3]
-        node1 ansible_host=192.168.1.110
-        node2 ansible_host=192.168.1.112
-        [loadbalancer]
-        node1 ansible_host=192.168.1.110
-
-    garage:
-        [garage]
-        node1 ansible_host=192.168.1.112
-        node2 ansible_host=192.168.1.113
-        node3 ansible_host=192.168.1.110
-    """
+def build_inventory(
+    hosts:      list[dict],
+    engine:     str = "",
+    runner_dir: str = "",
+    new_ips:    set[str] | None = None,   # IP новых нод для группы new_workers
+) -> str:
     master_h  = next((h for h in hosts if h.get("role") == "master"), hosts[0])
     master_ip = master_h["ip"]
     worker_hs = [h for h in hosts if h["ip"] != master_ip]
     all_ips   = [h["ip"] for h in hosts]
-    # s3 — все ноды кроме последней worker (первые две из трёх)
     s3_ips    = all_ips[:-1] if len(all_ips) > 1 else all_ips
+    new_ips   = new_ips or set()
 
     def host_line(name: str, ip: str) -> str:
         return f"{name} ansible_host={ip}"
 
     if engine == "ceph":
-        # имена нод берём из label хоста
         master_name = master_h.get("label", "node-master")
-        lines = [
-            "[master]",
-            host_line(master_name, master_ip),
-            "[workers]",
-        ]
+        lines = ["[master]", host_line(master_name, master_ip), "[workers]"]
         for h in worker_hs:
+            lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
+        # new_workers — только добавляемые ноды, для scale_ceph.yml
+        lines.append("[new_workers]")
+        new_worker_hs = [h for h in worker_hs if h["ip"] in new_ips]
+        for h in new_worker_hs:
             lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
         groups_ini = "\n".join(lines)
 
     elif engine == "seaweedfs":
-        # имена node1, node2, node3 в порядке передачи
         names = {h["ip"]: f"node{i}" for i, h in enumerate(hosts, start=1)}
         lines = ["[seaweedfs]"]
         for ip in all_ips:
@@ -102,7 +80,6 @@ def build_inventory(hosts: list[dict], engine: str = "", runner_dir: str = "") -
         groups_ini = "\n".join(lines)
 
     elif engine == "garage":
-        # все ноды как node1..N, master последний (как в примере)
         ordered = worker_hs + [master_h]
         names   = {h["ip"]: f"node{i}" for i, h in enumerate(ordered, start=1)}
         lines   = ["[garage]"]
@@ -121,7 +98,7 @@ def build_inventory(hosts: list[dict], engine: str = "", runner_dir: str = "") -
     vars_lines = [
         "[all:vars]",
         f"ansible_user={first['ssh_user']}",
-        f"ansible_python_interpreter=/usr/bin/python3",
+        "ansible_python_interpreter=/usr/bin/python3",
     ]
     if first.get("ssh_private_key_path"):
         vars_lines.append(f"ansible_ssh_private_key_file={first['ssh_private_key_path']}")
@@ -296,6 +273,102 @@ async def run_teardown_async(cluster_id: str, engine: str, hosts: list[dict], ex
     asyncio.create_task(_bg(), name=f"teardown-{job_id}")
     return job_id
 
+# ── Scale ─────────────────────────────────────────────────────────────────────
+
+async def run_scale_async(
+    cluster_id: str,
+    engine:     str,
+    hosts:      list[dict],        # все ноды (старые + новые)
+    new_hosts:  list[dict],        # только новые — для передачи в extra_vars
+    extra_vars: dict,
+) -> str:
+    """
+    Масштабирование — запуск deploy_{engine}.yml с обновлённым инвентарём.
+
+    Новые ноды передаются в extra_vars как new_nodes_ips (список IP).
+    Плейбук использует эту переменную чтобы ограничить деструктивные
+    задачи (зачистка диска, инициализация OSD) только новыми нодами:
+
+        when: inventory_hostname in new_nodes_ips
+
+    Существующие ноды Ansible проверит но диски не тронет.
+    """
+    pb_path = _playbook_path(engine, "scale")
+    pb_name = f"scale_{engine}.yml"
+    job_id  = str(uuid.uuid4())
+
+    # IP новых нод — передадим в плейбук
+    new_nodes_ips = [h["ip"] for h in new_hosts]
+
+    # Объединить extra_vars с информацией о новых нодах
+    scale_vars = {
+        **extra_vars,
+        "new_nodes_ips": new_nodes_ips,   # используется в when: условиях плейбука
+        "is_scale":      True,             # флаг для плейбука: режим масштабирования
+    }
+
+    # Upsert всех нод — новые добавятся, существующие обновятся
+    host_ids: list[str] = []
+    for h in hosts:
+        hid = await upsert_host(
+            ip=h["ip"],
+            label=h.get("label", h["ip"]),
+            ssh_user=h["ssh_user"],
+            ssh_port=h["ssh_port"],
+            ssh_private_key_path=h.get("ssh_private_key_path"),
+            role=h.get("role", "worker"),
+            cluster_id=cluster_id,
+        )
+        host_ids.append(hid)
+
+    # Обновить host_ids и node_count в документе кластера
+    from app.db.mongo import get_clusters_collection
+    from datetime import datetime, timezone
+    await get_clusters_collection().update_one(
+        {"cluster_id": cluster_id},
+        {"$set": {
+            "host_ids":   host_ids,
+            "node_count": len(host_ids),
+            "status":     ClusterStatus.scaling.value,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+
+    await create_job(
+        job_id=job_id,
+        cluster_id=cluster_id,
+        engine=engine,
+        job_type=JobType.scale.value,
+        playbook=pb_name,
+        extra_vars=scale_vars,
+    )
+
+    async def _bg() -> None:
+        await set_running(job_id)
+        log.info("Scale %s → running  cluster=%s new_nodes=%s", job_id, cluster_id, new_nodes_ips)
+        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
+        inventory  = build_inventory(hosts, engine=engine, runner_dir=runner_dir, new_ips=set(new_nodes_ips))
+        loop = asyncio.get_running_loop()
+        try:
+            rc, stdout = await loop.run_in_executor(
+                None,
+                functools.partial(_run_sync, pb_path, inventory, runner_dir, scale_vars),
+            )
+        except Exception as exc:
+            log.exception("Scale %s: ошибка runner", job_id)
+            await set_finished(job_id, rc=1, log=str(exc))
+            await set_cluster_status(cluster_id, ClusterStatus.failed, error_msg=str(exc))
+            return
+        await set_finished(job_id, rc=rc, log=stdout)
+        if rc == 0:
+            await set_cluster_ready(cluster_id, s3_endpoint=_s3_endpoint(engine, hosts))
+            log.info("Scale %s → success", job_id)
+        else:
+            await set_cluster_status(cluster_id, ClusterStatus.failed, error_msg=f"scale rc={rc}")
+            log.warning("Scale %s → failed rc=%d", job_id, rc)
+
+    asyncio.create_task(_bg(), name=f"scale-{job_id}")
+    return job_id
 
 # ── Ping ──────────────────────────────────────────────────────────────────────
 

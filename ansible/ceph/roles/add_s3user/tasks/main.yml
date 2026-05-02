@@ -2,10 +2,20 @@
   block:
     - name: Check if RGW user exists
       ansible.builtin.command: >
-        cephadm shell -- radosgw-admin user info --uid={{ rgw_user_uid }}
+        radosgw-admin user info --uid={{ rgw_user_uid }}
       register: rgw_user_info
       failed_when: false
       changed_when: false
+      timeout: 30
+      environment:
+        CEPH_CONF: /etc/ceph/ceph.conf
+
+    # - name: Check if RGW user exists
+    #   ansible.builtin.command: >
+    #     cephadm shell -- radosgw-admin user info --uid={{ rgw_user_uid }}
+    #   register: rgw_user_info
+    #   failed_when: false
+    #   changed_when: false
 
     # Если пользователь существует — парсим JSON
     - name: Parse existing RGW user info

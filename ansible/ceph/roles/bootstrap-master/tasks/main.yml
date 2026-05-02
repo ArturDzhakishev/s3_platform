@@ -32,11 +32,13 @@
         path: /etc/ceph/ceph.conf
       register: ceph_conf
 
+    #  Убрать skip-pull in production
     - name: Bootstrap Ceph cluster using cephadm
       command: >
         cephadm bootstrap
         --mon-ip {{ ansible_host }}
         --skip-dashboard
+        --skip-pull
         --ssh-user {{ ceph_ssh_user }}
       register: ceph_bootstrap
       when: not ceph_conf.stat.exists

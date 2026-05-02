@@ -5,31 +5,19 @@
 #              cephadm есть ТОЛЬКО на мастере (согласно deploy-плейбуку),
 #              поэтому проверка наличия cephadm и rm-cluster только там.
 #              Воркеры только чистят диски и удаляют пакеты.
-#
-# Usage:
-#   ansible-playbook -i hosts.ini destroy_ceph_cluster.yml \
-#     -e "i_understand_this_is_irreversible=true"
-#
-# Переменные:
-#   i_understand_this_is_irreversible — защитный флаг    (default: false)
-#   wipe_disks                        — обнулить /dev/sdb (default: true)
-#   remove_packages                   — удалить пакеты    (default: false)
-# =============================================================================
 
-# =============================================================================
-# PLAY 1: Удаление кластера с мастер-ноды
-# =============================================================================
-- name: "Ceph | Play 1 — Удаление кластера (master)"
-  hosts: master
+- name: "Ceph | Play 1 — Удаление кластера"
+  hosts: all
   become: true
   gather_facts: true
+  serial: 1  # Выполнять по одной ноде за раз
 
   vars:
     wipe_disks: true
     remove_packages: false
 
   pre_tasks:
-    - name: "Precheck | Получение FSID кластера"
+    - name: "Precheck | Получение списка daemon'ов cephadm"
       ansible.builtin.command: cephadm ls --no-detail
       register: cephadm_ls
       changed_when: false
@@ -44,14 +32,16 @@
             | select('defined')
             | list | first | default('')
           }}
-      when: cephadm_ls.rc == 0
+      when:
+        - cephadm_ls.rc == 0
+        - cephadm_ls.stdout | length > 0
 
     - name: "Precheck | FSID найден"
       ansible.builtin.debug:
         msg: "Кластер FSID: {{ ceph_fsid }}"
       when: ceph_fsid | default('') | length > 0
 
-    - name: "Precheck | Кластер не найден на мастере"
+    - name: "Precheck | Кластер не найден"
       ansible.builtin.debug:
         msg: "FSID не обнаружен — кластер уже удалён или не был развёрнут."
       when: ceph_fsid | default('') | length == 0
@@ -59,30 +49,42 @@
   tasks:
 
     # =========================================================================
-    # ШАГ 1 | Остановка Ceph-сервисов
+    # ШАГ 1 | Остановка всех Ceph контейнеров
     # =========================================================================
-    - name: "Master | Остановка всех ceph-сервисов"
+    - name: "Cleanup | Остановка всех ceph-контейнеров"
       ansible.builtin.shell: |
-        systemctl stop $(systemctl list-units 'ceph-*' --no-legend | awk '{print $1}') 2>/dev/null || true
-        systemctl stop $(systemctl list-units 'cephadm*' --no-legend | awk '{print $1}') 2>/dev/null || true
+        docker ps -a --filter name=ceph -q | xargs -r docker stop 2>/dev/null || true
+        docker ps -a --filter name=ceph -q | xargs -r docker rm -f 2>/dev/null || true
       changed_when: false
       failed_when: false
 
     # =========================================================================
-    # ШАГ 2 | Удаление кластера через cephadm
+    # ШАГ 2 | Остановка systemd юнитов
     # =========================================================================
-    - name: "Master | cephadm rm-cluster --force"
+    - name: "Cleanup | Остановка ceph systemd-юнитов"
+      ansible.builtin.shell: |
+        systemctl list-units 'ceph-*' --no-legend \
+          | awk '{print $1}' | xargs -r systemctl stop 2>/dev/null || true
+        systemctl list-units 'cephadm*' --no-legend \
+          | awk '{print $1}' | xargs -r systemctl stop 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    # =========================================================================
+    # ШАГ 3 | Удаление кластера через cephadm (только на мастере)
+    # =========================================================================
+    - name: "Master | cephadm rm-cluster --force --zap-osds"
       ansible.builtin.command: >
         cephadm rm-cluster
         --fsid {{ ceph_fsid }}
         --force
+        --zap-osds
       register: rm_cluster
       changed_when: rm_cluster.rc == 0
-      failed_when:
-        - rm_cluster.rc != 0
-        - "'No such file' not in (rm_cluster.stderr | default(''))"
-        - "'not found'   not in (rm_cluster.stderr | default(''))"
-      when: ceph_fsid | default('') | length > 0
+      failed_when: false
+      when:
+        - ceph_fsid | default('') | length > 0
+        - inventory_hostname in groups['master']
 
     - name: "Master | Результат rm-cluster"
       ansible.builtin.debug:
@@ -90,42 +92,104 @@
           rc     : {{ rm_cluster.rc | default('skipped') }}
           stdout : {{ rm_cluster.stdout | default('') }}
           stderr : {{ rm_cluster.stderr | default('') }}
-      when: ceph_fsid | default('') | length > 0
+      when:
+        - inventory_hostname in groups['master']
+        - ceph_fsid | default('') | length > 0
 
     # =========================================================================
-    # ШАГ 3 | Очистка файловой системы на мастере
+    # ШАГ 4 | Деактивация LVM (все ноды)
     # =========================================================================
-    - name: "Master | Удаление /etc/ceph"
-      ansible.builtin.file:
-        path: /etc/ceph
-        state: absent
-      failed_when: false
-
-    - name: "Master | Удаление /var/lib/ceph"
-      ansible.builtin.file:
-        path: /var/lib/ceph
-        state: absent
-      failed_when: false
-
-    - name: "Master | Удаление /var/log/ceph"
-      ansible.builtin.file:
-        path: /var/log/ceph
-        state: absent
-      failed_when: false
-
-    - name: "Master | Очистка остатков systemd-юнитов"
+    - name: "Cleanup | Деактивировать все Ceph LV"
       ansible.builtin.shell: |
-        find /etc/systemd/system -name 'ceph*'   -delete 2>/dev/null || true
+        for vg in $(vgs --noheadings -o vg_name 2>/dev/null \
+                    | grep 'ceph' | tr -d ' '); do
+          lvchange -an /dev/$vg 2>/dev/null || true
+          vgchange -an "$vg"   2>/dev/null || true
+          vgremove  -ff "$vg"  2>/dev/null || true
+        done
+      changed_when: false
+      failed_when: false
+
+    # =========================================================================
+    # ШАГ 5 | Поиск дисков для очистки
+    # =========================================================================
+    - name: "Cleanup | Найти диски с Ceph PV"
+      ansible.builtin.shell: |
+        pvs --noheadings -o pv_name,vg_name 2>/dev/null \
+          | grep 'ceph' | awk '{print $1}' \
+          | sed 's/[0-9]*$//' | sort -u
+      register: ceph_pv_disks
+      changed_when: false
+      failed_when: false
+
+    - name: "Cleanup | Найти диски с Ceph сигнатурами"
+      ansible.builtin.shell: |
+        lsblk -dpno NAME,TYPE | awk '$2=="disk" {print $1}' | while read disk; do
+          wipefs "$disk" 2>/dev/null | grep -qi ceph && echo "$disk"
+        done
+      register: ceph_sig_disks
+      changed_when: false
+      failed_when: false
+
+    - name: "Cleanup | Объединить список дисков"
+      ansible.builtin.set_fact:
+        all_ceph_disks: >-
+          {{
+            (ceph_pv_disks.stdout_lines + ceph_sig_disks.stdout_lines)
+            | unique | list
+          }}
+
+    - name: "Cleanup | Показать найденные диски"
+      ansible.builtin.debug:
+        msg: "Диски для очистки на {{ inventory_hostname }}: {{ all_ceph_disks }}"
+
+    # =========================================================================
+    # ШАГ 6 | Очистка дисков
+    # =========================================================================
+    - name: "Cleanup | Стереть Ceph диски"
+      ansible.builtin.shell: |
+        umount "{{ item }}"  2>/dev/null || true
+        umount "{{ item }}1" 2>/dev/null || true
+        pvremove -ff "{{ item }}" 2>/dev/null || true
+        wipefs -a "{{ item }}"
+        dd if=/dev/zero of="{{ item }}" bs=1M count=100
+        udevadm settle
+        partprobe "{{ item }}" 2>/dev/null || true
+      loop: "{{ all_ceph_disks }}"
+      when:
+        - wipe_disks | bool
+        - all_ceph_disks | length > 0
+      failed_when: false
+
+    # =========================================================================
+    # ШАГ 7 | Удаление директорий
+    # =========================================================================
+    - name: "Cleanup | Удалить Ceph директории"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/ceph
+        - /etc/ceph
+        - /var/log/ceph
+        - /run/ceph
+      failed_when: false
+
+    # =========================================================================
+    # ШАГ 8 | Очистка systemd
+    # =========================================================================
+    - name: "Cleanup | Удалить systemd юниты"
+      ansible.builtin.shell: |
+        find /etc/systemd/system -name 'ceph*'    -delete 2>/dev/null || true
         find /etc/systemd/system -name 'cephadm*' -delete 2>/dev/null || true
         systemctl daemon-reload
       changed_when: false
       failed_when: false
 
     # =========================================================================
-    # ШАГ 4 | Удаление пакетов на мастере (опционально)
-    # Обратный к "Install base dependencies" из deploy
+    # ШАГ 9 | Удаление пакетов (опционально)
     # =========================================================================
-    - name: "Master | Удаление ceph-пакетов"
+    - name: "Cleanup | Удаление ceph-пакетов"
       ansible.builtin.apt:
         name:
           - cephadm
@@ -134,34 +198,57 @@
         state: absent
         purge: true
         autoremove: true
-      when: remove_packages
+      when: remove_packages | bool
       failed_when: false
 
     # =========================================================================
-    # ШАГ 5 | Верификация на мастере
+    # ШАГ 10 | Верификация
     # =========================================================================
-    - name: "Master | Проверка отсутствия ceph-контейнеров"
+    - name: "Verify | Проверить оставшиеся контейнеры"
       ansible.builtin.command: docker ps -a --filter name=ceph
       register: docker_ceph
       changed_when: false
       failed_when: false
 
-    - name: "Master | Предупреждение об оставшихся контейнерах"
-      ansible.builtin.debug:
-        msg: >-
-          ВНИМАНИЕ: Остались ceph-контейнеры на {{ inventory_hostname }}:
-          {{ docker_ceph.stdout }}
-      when:
-        - docker_ceph.rc == 0
-        - docker_ceph.stdout_lines | length > 1
+    - name: "Verify | Проверить оставшиеся VG"
+      ansible.builtin.shell: |
+        vgs 2>/dev/null | grep ceph || echo "Ceph VG не найдены"
+      register: vgs_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Verify | Проверить чистоту дисков"
+      ansible.builtin.shell: |
+        wipefs "{{ item }}" 2>/dev/null || echo "Диск недоступен"
+      loop: "{{ all_ceph_disks }}"
+      register: wipefs_check
+      changed_when: false
+      failed_when: false
+      when: all_ceph_disks | length > 0
+
+    - name: "Verify | Проверить ceph директории"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /var/lib/ceph
+        - /etc/ceph
+      register: dir_check
+      failed_when: false
 
   post_tasks:
-    - name: "Master | Итог"
+    - name: "Summary | Итог по ноде {{ inventory_hostname }}"
       ansible.builtin.debug:
         msg:
-          - "[ master ] {{ inventory_hostname }} ({{ ansible_host }}) — кластер удалён"
-          - "FSID: {{ ceph_fsid | default('не найден') }}"
-          - "Время: {{ ansible_date_time.iso8601 }}"
+          - "========================================"
+          - "Нода    : {{ inventory_hostname }} ({{ ansible_host }})"
+          - "FSID    : {{ ceph_fsid | default('не найден') }}"
+          - "Диски   : {{ all_ceph_disks | default([]) }}"
+          - "VG      : {{ vgs_check.stdout }}"
+          - "Контейн.: {{ docker_ceph.stdout_lines | length - 1 }} шт."
+          - "Директории /etc/ceph:     {{ 'ОСТАЛАСЬ' if dir_check.results[1].stat.exists else 'удалена' }}"
+          - "Директории /var/lib/ceph: {{ 'ОСТАЛАСЬ' if dir_check.results[0].stat.exists else 'удалена' }}"
+          - "Время   : {{ ansible_date_time.iso8601 }}"
+          - "========================================"
 
 # =============================================================================
 # PLAY 2: Очистка воркер-нод
@@ -219,29 +306,98 @@
     # ШАГ 3 | Очистка дисков
     # Те же команды что в deploy: "Prepare worker nodes for Ceph installation"
     # =========================================================================
-    - name: "Workers | Размонтирование /dev/sdb"
-      ansible.builtin.shell: umount /dev/sdb* || true
+    - name: Find all Ceph-related VGs
+      ansible.builtin.shell: |
+        vgs --noheadings -o vg_name 2>/dev/null | grep '^  ceph-' | tr -d ' '
+      register: ceph_vgs
       changed_when: false
       failed_when: false
-      when: wipe_disks
 
-    - name: "Workers | sgdisk --zap-all /dev/sdb"
-      ansible.builtin.command: sgdisk --zap-all /dev/sdb
+    - name: Deactivate and remove Ceph VGs
+      ansible.builtin.shell: |
+        vgchange -an "{{ item }}"
+        vgremove -ff "{{ item }}"
+      loop: "{{ ceph_vgs.stdout_lines }}"
+      when: ceph_vgs.stdout_lines | length > 0
       failed_when: false
-      changed_when: true
-      when: wipe_disks
 
-    - name: "Workers | wipefs -a /dev/sdb"
-      ansible.builtin.command: wipefs -a /dev/sdb
+    - name: Find all disks with Ceph signatures
+      ansible.builtin.shell: |
+        lsblk -dpno NAME,TYPE | awk '$2=="disk" {print $1}' | while read disk; do
+          if wipefs "$disk" 2>/dev/null | grep -qi ceph; then
+            echo "$disk"
+          fi
+        done
+      register: ceph_disks
+      changed_when: false
       failed_when: false
-      changed_when: true
-      when: wipe_disks
 
-    - name: "Workers | dd нулями начало /dev/sdb"
-      ansible.builtin.command: dd if=/dev/zero of=/dev/sdb bs=1M count=100
+    - name: Find disks with LVM/Ceph PVs
+      ansible.builtin.shell: |
+        pvs --noheadings -o pv_name,vg_name 2>/dev/null \
+          | grep 'ceph-' \
+          | awk '{print $1}'
+      register: ceph_pv_disks
+      changed_when: false
       failed_when: false
-      changed_when: true
-      when: wipe_disks
+
+    - name: Merge all Ceph disks found
+      ansible.builtin.set_fact:
+        all_ceph_disks: >-
+          {{
+            (ceph_disks.stdout_lines + ceph_pv_disks.stdout_lines)
+            | map('regex_replace', '[0-9]+$', '')
+            | unique
+            | list
+          }}
+
+    - name: Remove PVs from Ceph disks
+      ansible.builtin.shell: |
+        pvremove -ff "{{ item }}"
+      loop: "{{ all_ceph_disks }}"
+      when: all_ceph_disks | length > 0
+      failed_when: false
+
+    - name: Wipe all Ceph disk signatures
+      ansible.builtin.shell: |
+        wipefs -a "{{ item }}"
+        dd if=/dev/zero of="{{ item }}" bs=1M count=100
+        udevadm settle
+      loop: "{{ all_ceph_disks }}"
+      when: all_ceph_disks | length > 0
+
+    - name: Remove Ceph directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/ceph
+        - /etc/ceph
+        - /var/log/ceph
+        - /run/ceph
+    # - name: "Workers | Размонтирование /dev/sdb"
+    #   ansible.builtin.shell: umount /dev/sdb* || true
+    #   changed_when: false
+    #   failed_when: false
+    #   when: wipe_disks
+
+    # - name: "Workers | sgdisk --zap-all /dev/sdb"
+    #   ansible.builtin.command: sgdisk --zap-all /dev/sdb
+    #   failed_when: false
+    #   changed_when: true
+    #   when: wipe_disks
+
+    # - name: "Workers | wipefs -a /dev/sdb"
+    #   ansible.builtin.command: wipefs -a /dev/sdb
+    #   failed_when: false
+    #   changed_when: true
+    #   when: wipe_disks
+
+    # - name: "Workers | dd нулями начало /dev/sdb"
+    #   ansible.builtin.command: dd if=/dev/zero of=/dev/sdb bs=1M count=100
+    #   failed_when: false
+    #   changed_when: true
+    #   when: wipe_disks
 
     # =========================================================================
     # ШАГ 4 | Удаление пакетов на воркерах (опционально)
