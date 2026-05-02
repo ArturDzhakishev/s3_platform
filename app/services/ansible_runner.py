@@ -69,14 +69,42 @@ def build_inventory(
         groups_ini = "\n".join(lines)
 
     elif engine == "seaweedfs":
-        names = {h["ip"]: f"node{i}" for i, h in enumerate(hosts, start=1)}
-        lines = ["[seaweedfs]"]
-        for ip in all_ips:
-            lines.append(host_line(names[ip], ip))
-        lines.append("[s3]")
-        for ip in s3_ips:
-            lines.append(host_line(names[ip], ip))
-        lines += ["[loadbalancer]", host_line(names[master_ip], master_ip)]
+        # Имя ноды — из label, стабильно между deploy и scale
+        names = {h["ip"]: h.get("label", f"node{i}") for i, h in enumerate(hosts, start=1)}
+
+        # Все доступные группы SeaweedFS
+        all_groups = ["seaweedfs", "s3", "loadbalancer"]
+
+        # Построить маппинг группа → список хостов
+        group_map: dict[str, list[dict]] = {g: [] for g in all_groups}
+        for h in hosts:
+            custom = h.get("groups", [])
+            if custom:
+                # Клиент явно указал группы
+                for g in custom:
+                    if g in group_map:
+                        group_map[g].append(h)
+            else:
+                # Дефолт: все ноды в seaweedfs,
+                # мастер в s3 и loadbalancer
+                group_map["seaweedfs"].append(h)
+                if h["ip"] == master_ip:
+                    group_map["s3"].append(h)
+                    group_map["loadbalancer"].append(h)
+
+        # Гарантировать: нода в s3/loadbalancer всегда и в seaweedfs
+        seaweedfs_ips = {h["ip"] for h in group_map["seaweedfs"]}
+        for g in ("s3", "loadbalancer"):
+            for h in group_map[g]:
+                if h["ip"] not in seaweedfs_ips:
+                    group_map["seaweedfs"].append(h)
+                    seaweedfs_ips.add(h["ip"])
+
+        lines = []
+        for g in all_groups:
+            lines.append(f"[{g}]")
+            for h in group_map[g]:
+                lines.append(host_line(names[h["ip"]], h["ip"]))
         groups_ini = "\n".join(lines)
 
     elif engine == "garage":

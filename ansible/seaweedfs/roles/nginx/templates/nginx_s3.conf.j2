@@ -10,12 +10,9 @@ upstream seaweedfs_s3_backends {
 server {
     listen 80;
 
-    # Укажи здесь IP-адрес сервера или домен (например, s3.твоя-платформа.ru)
-    # Если планируешь использовать virtual-hosted style запросы (bucket.domain.com),
-    # добавь wildcard: server_name domain.com *.domain.com;
     server_name {{ nginx_s3_domain }};
 
-    # КРИТИЧНО ДЛЯ S3: Отключаем лимит на размер загружаемого файла.
+    # Отключаем лимит на размер загружаемого файла.
     client_max_body_size 0;
 
     # Отключаем буферизацию. Данные будут стримиться напрямую в SeaweedFS.

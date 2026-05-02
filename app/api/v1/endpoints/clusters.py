@@ -29,7 +29,17 @@ class HostIn(BaseModel):
     ssh_port:            int         = Field(default=22, ge=1, le=65535)
     ssh_private_key_path: str | None = None
     role:                str         = Field(default="worker", examples=["master", "worker"])
-
+    groups:              list[str]   = Field(
+        default_factory=list,
+        description=(
+            "Ansible-группы в которые входит нода. "
+            "Если не указано — определяется движком автоматически. "
+            "SeaweedFS: seaweedfs, s3, loadbalancer. "
+            "Ceph: master, workers, new_workers. "
+            "Garage: garage, bootstrap."
+        ),
+        examples=[["seaweedfs", "s3"], ["seaweedfs"], ["seaweedfs", "loadbalancer"]],
+    )
 
 class CreateClusterRequest(BaseModel):
     name:       str              = Field(..., examples=["prod-ceph-01"])
@@ -118,8 +128,8 @@ async def scale_cluster(cluster_id: str, body: ScaleRequest):
         job_id = await run_scale_async(
             cluster_id=cluster_id,
             engine=doc["engine"],
-            hosts=all_hosts,           # все ноды для инвентаря
-            new_hosts=new_hosts_payload,  # только новые — для when: в плейбуке
+            hosts=all_hosts,          
+            new_hosts=new_hosts_payload,  
             extra_vars=doc.get("extra_vars", {}),
         )
     except FileNotFoundError as e:
