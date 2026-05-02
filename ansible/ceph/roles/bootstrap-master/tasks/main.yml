@@ -27,9 +27,10 @@
         state: present
         update_cache: yes
 
-    # - name: Disable ipv6 on local ceph-master
-    #   command: >
-    #     sysctl -p
+    - name: Check if Ceph already bootstrapped
+      stat:
+        path: /etc/ceph/ceph.conf
+      register: ceph_conf
 
     - name: Bootstrap Ceph cluster using cephadm
       command: >
@@ -37,12 +38,11 @@
         --mon-ip {{ ansible_host }}
         --skip-dashboard
         --ssh-user {{ ceph_ssh_user }}
-      args:
-        creates: /etc/ceph/ceph.conf
       register: ceph_bootstrap
-      retries: 5
-      delay: 10
-      until: ceph_bootstrap.rc == 0
+      when: not ceph_conf.stat.exists
+      # retries: 5
+      # delay: 10
+      # until: ceph_bootstrap.finished is defined and ceph_bootstrap.rc == 0
 
     - name: Get Ceph Public Key
       command: ceph cephadm get-pub-key
