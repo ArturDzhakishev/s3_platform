@@ -1,0 +1,7 @@
+- name: Deploy Garage cluster
+  hosts: garage
+  become: yes
+
+  roles:
+    - garage
+    - connect

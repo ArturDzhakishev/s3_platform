@@ -20,6 +20,7 @@ import os
 import time
 import uuid
 import functools
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +47,18 @@ def build_inventory(
     runner_dir: str = "",
     new_ips:    set[str] | None = None,   # IP новых нод для группы new_workers
 ) -> str:
+    """
+    Генерирует hosts.ini и записывает в runner_dir/inventory/hosts.ini.
+    Возвращает путь к файлу.
+
+    Группы по движкам:
+      ceph      — [master], [workers], [new_workers]
+      seaweedfs — [seaweedfs], [s3], [loadbalancer]
+      garage    — [garage], [new_nodes]
+    """
     master_h  = next((h for h in hosts if h.get("role") == "master"), hosts[0])
     master_ip = master_h["ip"]
     worker_hs = [h for h in hosts if h["ip"] != master_ip]
-    all_ips   = [h["ip"] for h in hosts]
-    s3_ips    = all_ips[:-1] if len(all_ips) > 1 else all_ips
     new_ips   = new_ips or set()
 
     def host_line(name: str, ip: str) -> str:
@@ -71,12 +79,10 @@ def build_inventory(
     elif engine == "seaweedfs":
         # Имя ноды — из label, стабильно между deploy и scale
         names = {h["ip"]: h.get("label", f"node{i}") for i, h in enumerate(hosts, start=1)}
-
-        # Все доступные группы SeaweedFS
         all_groups = ["seaweedfs", "s3", "loadbalancer"]
-
         # Построить маппинг группа → список хостов
         group_map: dict[str, list[dict]] = {g: [] for g in all_groups}
+        
         for h in hosts:
             custom = h.get("groups", [])
             if custom:
@@ -108,11 +114,19 @@ def build_inventory(
         groups_ini = "\n".join(lines)
 
     elif engine == "garage":
+        # workers первыми, master последним — как в эталонном hosts.ini
         ordered = worker_hs + [master_h]
-        names   = {h["ip"]: f"node{i}" for i, h in enumerate(ordered, start=1)}
-        lines   = ["[garage]"]
+        # имя из label — стабильно между deploy и scale (не по индексу!)
+        names = {h["ip"]: h.get("label", h["ip"]) for h in ordered}
+        lines = ["[garage]"]
         for h in ordered:
             lines.append(host_line(names[h["ip"]], h["ip"]))
+        # [new_nodes] — только добавляемые ноды (для scale_garage.yml)
+        # при deploy new_ips пустой — группа будет пустой, плейбук её проигнорирует
+        lines.append("[new_nodes]")
+        for h in ordered:
+            if h["ip"] in new_ips:
+                lines.append(host_line(names[h["ip"]], h["ip"]))
         groups_ini = "\n".join(lines)
 
     else:
@@ -200,7 +214,19 @@ async def run_deploy_async(
     cluster_id = str(uuid.uuid4())
     job_id     = str(uuid.uuid4())
 
-    # ── 1. hosts ──────────────────────────────────────────────────────────────
+    if engine == "garage":
+        extra_vars = {
+            **extra_vars,
+            "garage_nodes_config": {
+                h.get("label", h["ip"]): {
+                    "zone":     h.get("zone")     or "default",
+                    "capacity": h.get("capacity") or "1G",
+                }
+                for h in hosts
+            },
+        }
+
+    # 1. Upsert хостов в MongoDB
     host_ids: list[str] = []
     for h in hosts:
         hid = await upsert_host(
@@ -211,10 +237,12 @@ async def run_deploy_async(
             ssh_private_key_path=h.get("ssh_private_key_path"),
             role=h.get("role", "worker"),
             cluster_id=cluster_id,
+            zone=h.get("zone"),
+            capacity=h.get("capacity"),
         )
         host_ids.append(hid)
 
-    # ── 2. cluster ────────────────────────────────────────────────────────────
+    # 2. Создать документ кластера
     await create_cluster(
         cluster_id=cluster_id,
         name=name or f"{engine}-{cluster_id[:8]}",
@@ -224,7 +252,7 @@ async def run_deploy_async(
         deploy_job_id=job_id,
     )
 
-    # ── 3. job ────────────────────────────────────────────────────────────────
+    # 3. Создать документ job
     await create_job(
         job_id=job_id,
         cluster_id=cluster_id,
@@ -234,7 +262,7 @@ async def run_deploy_async(
         extra_vars=extra_vars,
     )
 
-    # ── 4. фон ───────────────────────────────────────────────────────────────
+    # 4. Запустить плейбук в фоне
     async def _bg() -> None:
         await set_running(job_id)
         log.info("Deploy %s → running  cluster=%s", job_id, cluster_id)
@@ -311,7 +339,7 @@ async def run_scale_async(
     extra_vars: dict,
 ) -> str:
     """
-    Масштабирование — запуск deploy_{engine}.yml с обновлённым инвентарём.
+    Масштабирование — запуск scale_{engine}.yml с обновлённым инвентарём.
 
     Новые ноды передаются в extra_vars как new_nodes_ips (список IP).
     Плейбук использует эту переменную чтобы ограничить деструктивные
@@ -335,7 +363,17 @@ async def run_scale_async(
         "is_scale":      True,             # флаг для плейбука: режим масштабирования
     }
 
-    # Upsert всех нод — новые добавятся, существующие обновятся
+    # Garage: пересобрать garage_nodes_config со всеми нодами (старые + новые)
+    if engine == "garage":
+        scale_vars["garage_nodes_config"] = {
+            h.get("label", h["ip"]): {
+                "zone":     h.get("zone")     or "default",
+                "capacity": h.get("capacity") or "1G",
+            }
+            for h in hosts
+        }
+
+    # Upsert всех нод (новые создадутся, старые обновятся)
     host_ids: list[str] = []
     for h in hosts:
         hid = await upsert_host(
@@ -346,12 +384,13 @@ async def run_scale_async(
             ssh_private_key_path=h.get("ssh_private_key_path"),
             role=h.get("role", "worker"),
             cluster_id=cluster_id,
+            zone=h.get("zone"),
+            capacity=h.get("capacity"),
         )
         host_ids.append(hid)
 
     # Обновить host_ids и node_count в документе кластера
     from app.db.mongo import get_clusters_collection
-    from datetime import datetime, timezone
     await get_clusters_collection().update_one(
         {"cluster_id": cluster_id},
         {"$set": {

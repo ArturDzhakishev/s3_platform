@@ -94,38 +94,57 @@ curl -s -X POST http://localhost:8000/api/v1/clusters \
 curl -s -X POST http://localhost:8000/api/v1/clusters \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "prod-garage-01",
-    "engine": "garage",
-    "hosts": [
-        {
-            "label": "node-master",
-            "ip": "192.168.1.110",
-            "ssh_user": "user",
-            "ssh_port": 22,
-            "ssh_private_key_path": "/home/user/.ssh/ceph"
-        },
-        {
-            "label": "node-02",
-            "ip": "192.168.1.112",
-            "ssh_user": "user",
-            "ssh_port": 22,
-            "ssh_private_key_path": "/home/user/.ssh/ceph"
-        },
-        {
-            "label": "node-03",
-            "ip": "192.168.1.113",
-            "ssh_user": "user",
-            "ssh_port": 22,
-            "ssh_private_key_path": "/home/user/.ssh/ceph"
-        }
-    ],
-    "extra_vars": {
-        "garage_version": "1.0.0",
-        "garage_replication_factor": 3,
-        "garage_s3_port": 3900,
-        "garage_admin_port": 3903,
-        "garage_rpc_port": 3901
+  "name": "prod-garage-01",
+  "engine": "garage",
+  "hosts": [
+    {
+      "label": "node1",
+      "ip": "192.168.1.112",
+      "ssh_user": "user",
+      "ssh_port": 22,
+      "ssh_private_key_path": "/home/user/.ssh/ceph",
+      "role": "worker",
+      "groups": [
+        "garage"
+      ],
+      "zone": "zone1",
+      "capacity": "2G"
+    },
+    {
+      "label": "node2",
+      "ip": "192.168.1.113",
+      "ssh_user": "user",
+      "ssh_port": 22,
+      "ssh_private_key_path": "/home/user/.ssh/ceph",
+      "role": "worker",
+      "groups": [
+        "garage"
+      ],
+      "zone": "zone1",
+      "capacity": "2G"
+    },
+    {
+      "label": "node3",
+      "ip": "192.168.1.110",
+      "ssh_user": "user",
+      "ssh_port": 22,
+      "ssh_private_key_path": "/home/user/.ssh/ceph",
+      "role": "master",
+      "groups": [
+        "garage"
+      ],
+      "zone": "zone1",
+      "capacity": "2G"
     }
+  ],
+  "extra_vars": {
+    "garage_version": "2.2.0",
+    "garage_rpc_port": 3901,
+    "garage_replication_factor": 1,
+    "garage_meta_dir": "/var/lib/garage/meta",
+    "garage_data_dir": "/var/lib/garage/data",
+    "name_bucket": "test"
+  }
 }' | jq .
 
 <!-- GET -->
@@ -159,7 +178,7 @@ curl -X POST http://localhost:8000/api/v1/clusters/{cluster_id}/scale \
   }'
 
 <!-- POST scale SeaweedFS -->
-curl -s -X POST http://localhost:8000/api/v1/clusters/CLUSTER_ID/scale \
+curl -s -X POST http://localhost:8000/api/v1/clusters/d7bcc394-b41c-4fea-a2a8-35a400b65222/scale \
   -H "Content-Type: application/json" \
   -d '{
   "new_hosts": [
@@ -188,19 +207,20 @@ curl -s -X POST http://localhost:8000/api/v1/clusters/CLUSTER_ID/scale \
   ]
 }' | jq .
 
+<!-- POST scale Garage -->
 curl -s -X POST http://localhost:8000/api/v1/clusters/CLUSTER_ID/scale \
   -H "Content-Type: application/json" \
   -d '{
   "new_hosts": [
     {
-      "label": "node-04",
-      "ip": "192.168.1.114",
+      "label": "node-01",
+      "ip": "192.168.1.111",
       "ssh_user": "user",
       "ssh_port": 22,
       "ssh_private_key_path": "/home/user/.ssh/ceph",
       "role": "worker",
       "groups": [
-        "seaweedfs"
+        "garage"
       ]
     }
   ]

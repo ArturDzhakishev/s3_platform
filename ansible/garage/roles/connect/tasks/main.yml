@@ -1,100 +1,173 @@
+---
+# roles/connect/tasks/main.yml
+# Подключает ноды в кластер Garage, назначает layout и создаёт API-ключ.
+# Все операции управления кластером выполняются на первой ноде группы.
+
+# ── 1. Получить ID каждой ноды (на всех нодах) ────────────────────────────
+
 - name: Get node ID
   command: garage node id
   register: garage_node_id_raw
   changed_when: false
 
-- name: Save node ID
+- name: Save node ID as fact
   set_fact:
-    garage_node_id: "{{ garage_node_id_raw.stdout }}"
+    garage_node_id: "{{ garage_node_id_raw.stdout | trim }}"
 
-- name: Wait for all nodes
+# ── 2. Подождать пока все ноды стартуют ───────────────────────────────────
+
+- name: Wait for all nodes to be ready
   pause:
     seconds: 5
 
-- name: Connect nodes
+# ── 3. Соединить ноды друг с другом (на каждой ноде) ──────────────────────
+
+- name: Connect to other nodes
   command: >
     garage node connect {{ hostvars[item].garage_node_id }}
   loop: "{{ groups['garage'] }}"
   when: item != inventory_hostname
   ignore_errors: true
 
-- name: Assign layout
+# ── 4. Назначить layout (только на первой ноде) ───────────────────────────
+
+- name: Assign layout for each node
   command: >
     garage layout assign
-    {{ hostvars[item].garage_node_id.split('@')[0] }}
-    -z {{ garage_nodes_config[item].zone }}
-    -c {{ garage_nodes_config[item].capacity }}
+    {{ hostvars[item].garage_node_id.split('@')[0] | trim }}
+    -z {{ garage_nodes_config[item]['zone'] }}
+    -c {{ garage_nodes_config[item]['capacity'] }}
     -t {{ item }}
   loop: "{{ groups['garage'] }}"
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
+
+# ── 5. Получить статус layout ─────────────────────────────────────────────
 
 - name: Get layout status
   command: garage layout show
-  register: garage_status
+  register: garage_layout_status
   changed_when: false
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
 
-- name: Set layout versions
+# ── 6. Разобрать версию и наличие staged изменений ────────────────────────
+# set_fact + delegate_to — устанавливает переменную только для первой ноды.
+# Остальные таски читают через hostvars[groups['garage'][0]].variable_name
+
+- name: Parse layout version and staged flag
   set_fact:
-    # Ищем текущую версию в тексте ответа и прибавляем 1
-    current_version: "{{ (garage_status.stdout | regex_search('Current cluster layout version: (\\d+)', '\\1') | default(['0'], true)) | first | int }}"
-    has_staged_changes: "{{ 'STAGED' in garage_status.stdout | upper }}"
+    garage_layout_version: >-
+      {{ (garage_layout_status.stdout
+          | regex_search('Current cluster layout version:\s+(\d+)', '\1')
+          | default(['0'], true))
+         | first | int }}
+    garage_has_staged: >-
+      {{ 'STAGED' in garage_layout_status.stdout | upper }}
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
 
-- name: Apply Garage layout
-  command: "garage layout apply --version {{ current_version + 1 }}"
-  run_once: true
-  when: has_staged_changes
+# ── 7. Применить layout если есть staged изменения ────────────────────────
 
+- name: Apply layout
+  command: >
+    garage layout apply
+    --version {{ hostvars[groups['garage'][0]].garage_layout_version | int + 1 }}
+  delegate_to: "{{ groups['garage'][0] }}"
+  run_once: true
+  when: hostvars[groups['garage'][0]].garage_has_staged | bool
+
+# ── 8. Создать API-ключ ───────────────────────────────────────────────────
 
 - name: Check existing keys
   command: garage key list
-  register: key_list
+  register: garage_key_list
   changed_when: false
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
   retries: 5
   delay: 2
-  until: key_list.rc == 0
+  until: garage_key_list.rc == 0
 
-- name: Create Garage API key
+- name: Create API key
   command: garage key create api-key
-  when: "'api-key' not in key_list.stdout"
-  register: garage_key_output
+  register: garage_key_create_output
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
+  when: "'api-key' not in garage_key_list.stdout"
 
-- name: Get existing key info
+# ── 9. Извлечь ключи ──────────────────────────────────────────────────────
+# Secret key доступен ТОЛЬКО в выводе garage key create.
+# При повторном вызове garage key info он скрыт как (redacted).
+
+- name: Extract keys from create output
+  set_fact:
+    garage_access_key: "{{ garage_key_create_output.stdout | regex_search('Key ID:\\s+(.+)', '\\1') | first | trim }}"
+    garage_secret_key: "{{ garage_key_create_output.stdout | regex_search('Secret key:\\s+(.+)', '\\1') | first | trim }}"
+  delegate_to: "{{ groups['garage'][0] }}"
+  run_once: true
+  when: garage_key_create_output is not skipped
+
+- name: Get access key info (ключ уже существовал)
   command: garage key info api-key
   register: garage_key_info
-  run_once: true
   changed_when: false
-
-- name: Extract access key
-  set_fact:
-    garage_access_key: "{{ garage_key_info.stdout | regex_search('Key ID: (.+)', '\\1') | first }}"
-    garage_secret_key: "{{ garage_key_info.stdout | regex_search('Secret key: (.+)', '\\1') | first }}"
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
+  when: garage_key_create_output is skipped
 
-- name: Save keys as JSON
+- name: Extract access key from existing key info
+  set_fact:
+    garage_access_key: "{{ garage_key_info.stdout | regex_search('Key ID:\\s+(.+)', '\\1') | first | trim }}"
+    garage_secret_key: "(redacted)"
+  delegate_to: "{{ groups['garage'][0] }}"
+  run_once: true
+  when: garage_key_create_output is skipped
+
+# ── 10. Сохранить ключи локально ──────────────────────────────────────────
+
+- name: Save API keys to JSON file
   copy:
     content: |
       {
-        "access_key": "{{ garage_access_key }}",
-        "secret_key": "{{ garage_secret_key }}"
+        "access_key": "{{ hostvars[groups['garage'][0]].garage_access_key }}",
+        "secret_key": "{{ hostvars[groups['garage'][0]].garage_secret_key }}"
       }
     dest: "./garage_keys.json"
     mode: '0600'
   delegate_to: localhost
   run_once: true
 
-- name: Create nextcloud bucket
+# ── 11. Создать бакет и выдать доступ ─────────────────────────────────────
+
+- name: Create bucket
   command: garage bucket create {{ name_bucket }}
-  register: bucket_create
-  failed_when: bucket_create.rc != 0 and 'already exists' not in bucket_create.stderr
-  changed_when: bucket_create.rc == 0
+  register: garage_bucket_create
+  failed_when: >
+    garage_bucket_create.rc != 0 and
+    'already exists' not in garage_bucket_create.stderr
+  changed_when: garage_bucket_create.rc == 0
+  delegate_to: "{{ groups['garage'][0] }}"
   run_once: true
 
-- name: Allow key access
+- name: Allow API key access to bucket
   command: >
-    garage bucket allow --read --write --owner
-    {{ name_bucket }} --key api-key
+    garage bucket allow
+    --read --write --owner
+    {{ name_bucket }}
+    --key api-key
+  delegate_to: "{{ groups['garage'][0] }}"
+  run_once: true
+
+# ── 12. Итог ───────────────────────────────────────────────────────────────
+
+- name: Show cluster summary
+  debug:
+    msg:
+      - "Кластер Garage готов"
+      - "S3 endpoint: http://{{ hostvars[groups['garage'][0]].ansible_host }}:{{ garage_s3_port | default(3900) }}"
+      - "Бакет: {{ name_bucket }}"
+      - "Access key: {{ hostvars[groups['garage'][0]].garage_access_key }}"
+      - "Secret key: {{ hostvars[groups['garage'][0]].garage_secret_key }}"
+      - "Ключи сохранены в: ./garage_keys.json"
   run_once: true

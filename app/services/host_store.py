@@ -19,51 +19,47 @@ def _now() -> datetime:
 
 
 async def upsert_host(
-    ip:                  str,
-    label:               str,
-    ssh_user:            str,
-    ssh_port:            int,
+    ip:                   str,
+    label:                str,
+    ssh_user:             str,
+    ssh_port:             int,
     ssh_private_key_path: str | None,
-    role:                str,
-    cluster_id:          str,
+    role:                 str,
+    cluster_id:           str,
+    zone:                 str | None = None,
+    capacity:             str | None = None,
 ) -> str:
     """
     Создать хост или обновить существующий по IP.
     Возвращает host_id.
-    Статус сразу in_use — хост используется создаваемым кластером.
     """
     col = get_hosts_collection()
     existing = await col.find_one({"ip": ip}, {"host_id": 1})
 
+    fields = {
+        "label":                label,
+        "ssh_user":             ssh_user,
+        "ssh_port":             ssh_port,
+        "ssh_private_key_path": ssh_private_key_path,
+        "role":                 role,
+        "status":               HostStatus.in_use.value,
+        "cluster_id":           cluster_id,
+        "updated_at":           _now(),
+        # Garage-специфичные поля — None для других движков
+        "zone":                 zone,
+        "capacity":             capacity,
+    }
+
     if existing:
         host_id = existing["host_id"]
-        await col.update_one(
-            {"host_id": host_id},
-            {"$set": {
-                "label":                label,
-                "ssh_user":             ssh_user,
-                "ssh_port":             ssh_port,
-                "ssh_private_key_path": ssh_private_key_path,
-                "role":                 role,
-                "status":               HostStatus.in_use.value,
-                "cluster_id":           cluster_id,
-                "updated_at":           _now(),
-            }},
-        )
+        await col.update_one({"host_id": host_id}, {"$set": fields})
     else:
         host_id = str(uuid.uuid4())
         await col.insert_one({
-            "host_id":              host_id,
-            "label":                label,
-            "ip":                   ip,
-            "ssh_user":             ssh_user,
-            "ssh_port":             ssh_port,
-            "ssh_private_key_path": ssh_private_key_path,
-            "role":                 role,
-            "status":               HostStatus.in_use.value,
-            "cluster_id":           cluster_id,
-            "created_at":           _now(),
-            "updated_at":           _now(),
+            "host_id":    host_id,
+            "ip":         ip,
+            "created_at": _now(),
+            **fields,
         })
 
     return host_id

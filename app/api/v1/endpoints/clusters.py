@@ -29,6 +29,7 @@ class HostIn(BaseModel):
     ssh_port:            int         = Field(default=22, ge=1, le=65535)
     ssh_private_key_path: str | None = None
     role:                str         = Field(default="worker", examples=["master", "worker"])
+    # SeaweedFS-специфичные поля
     groups:              list[str]   = Field(
         default_factory=list,
         description=(
@@ -36,9 +37,20 @@ class HostIn(BaseModel):
             "Если не указано — определяется движком автоматически. "
             "SeaweedFS: seaweedfs, s3, loadbalancer. "
             "Ceph: master, workers, new_workers. "
-            "Garage: garage, bootstrap."
+            "Garage: garage."
         ),
-        examples=[["seaweedfs", "s3"], ["seaweedfs"], ["seaweedfs", "loadbalancer"]],
+        examples=[["seaweedfs", "s3"], ["seaweedfs"], ["garage"]],
+    )
+    # Garage-специфичные поля
+    zone:     str | None = Field(
+        default=None,
+        description="Garage: зона размещения ноды (например zone1, dc1). По умолчанию — default.",
+        examples=["zone1", "dc1", "default"],
+    )
+    capacity: str | None = Field(
+        default=None,
+        description="Garage: ёмкость ноды (например 2G, 500M). По умолчанию — 1G.",
+        examples=["2G", "500M", "1G"],
     )
 
 class CreateClusterRequest(BaseModel):
