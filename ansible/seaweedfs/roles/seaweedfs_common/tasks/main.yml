@@ -9,9 +9,16 @@
     state: directory
   when: not weed_bin.stat.exists
 
-- name: Download SeaweedFS
+- name: Download SeaweedFS on controller
+  delegate_to: localhost
   get_url:
     url: https://github.com/seaweedfs/seaweedfs/releases/latest/download/linux_amd64.tar.gz
+    dest: /tmp/seaweedfs.tar.gz
+  when: not weed_bin.stat.exists
+
+- name: Copy SeaweedFS to node
+  ansible.builtin.copy:
+    src: /tmp/seaweedfs.tar.gz
     dest: /tmp/seaweedfs.tar.gz
   when: not weed_bin.stat.exists
 
