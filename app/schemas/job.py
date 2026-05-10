@@ -64,6 +64,7 @@ class JobStatusResponse(BaseModel):
 
 class JobAcceptedResponse(BaseModel):
     job_id: str
+    cluster_id: str
     status: JobStatus
     playbook: str
     message: str = "Плейбук запущен. Отслеживайте статус через GET /api/v1/jobs/{job_id}"

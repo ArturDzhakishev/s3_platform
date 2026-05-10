@@ -20,6 +20,7 @@ import os
 import time
 import uuid
 import functools
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,33 @@ from app.services.job_store import create_job, set_finished, set_running
 log = logging.getLogger(__name__)
 settings = get_settings()
 
+
+# ── SSH key helper ────────────────────────────────────────────────────────────
+
+def _write_key_files(hosts: list[dict], keys_dir: str) -> list[dict]:
+    """
+    Если хост передал PEM-содержимое (ssh_private_key) вместо пути,
+    записать его в keys_dir/key_{i} с правами 0600.
+
+    keys_dir должен существовать всё время работы плейбука —
+    используй постоянную директорию (runner_dir/keys/), а не TemporaryDirectory.
+    """
+    Path(keys_dir).mkdir(parents=True, exist_ok=True)
+    result = []
+    for i, h in enumerate(hosts):
+        h = dict(h)
+        pem = h.get("ssh_private_key")
+        has_path = bool(h.get("ssh_private_key_path"))
+        if pem and not has_path:
+            # Файл без расширения — Ansible не требует расширения
+            key_path = os.path.join(keys_dir, f"key_{i}")
+            with open(key_path, "w") as f:
+                f.write(pem)
+            os.chmod(key_path, 0o600)
+            h["ssh_private_key_path"] = key_path
+            log.debug("SSH key written: %s", key_path)
+        result.append(h)
+    return result
 
 # ── Inventory ─────────────────────────────────────────────────────────────────
 
@@ -266,11 +294,17 @@ async def run_deploy_async(
     async def _bg() -> None:
         await set_running(job_id)
         log.info("Deploy %s → running  cluster=%s", job_id, cluster_id)
-        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
-        inventory  = build_inventory(hosts, engine=engine, runner_dir=runner_dir)
+        # keys_dir внутри runner_dir — живёт всё время работы плейбука
+        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, job_id)
+        keys_dir   = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, "keys")
+        prepared   = _write_key_files(hosts, keys_dir)
+        inventory  = build_inventory(prepared, engine=engine, runner_dir=runner_dir)
         loop = asyncio.get_running_loop()
         try:
-            rc, stdout = await loop.run_in_executor(None, functools.partial(_run_sync, pb_path, inventory, runner_dir, extra_vars))
+            rc, stdout = await loop.run_in_executor(
+                None,
+                functools.partial(_run_sync, pb_path, inventory, runner_dir, extra_vars),
+            )
         except Exception as exc:
             log.exception("Deploy %s: ошибка runner", job_id)
             await set_finished(job_id, rc=1, log=str(exc))
@@ -306,8 +340,10 @@ async def run_teardown_async(cluster_id: str, engine: str, hosts: list[dict], ex
     async def _bg() -> None:
         await set_running(job_id)
         await set_cluster_status(cluster_id, ClusterStatus.deleting)
-        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
-        inventory = build_inventory(hosts, engine=engine, runner_dir=runner_dir)
+        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, job_id)
+        keys_dir   = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, "keys")
+        prepared   = _write_key_files(hosts, keys_dir)
+        inventory  = build_inventory(prepared, engine=engine, runner_dir=runner_dir)
         loop = asyncio.get_running_loop()
         try:
             rc, stdout = await loop.run_in_executor(
@@ -439,9 +475,13 @@ async def run_scale_async(
 
 # ── Ping ──────────────────────────────────────────────────────────────────────
 
-async def ping_host(ip: str, ssh_user: str, ssh_port: int, key_path: str | None) -> tuple[bool, float | None, str | None]:
+async def ping_host(
+    ip: str, ssh_user: str, ssh_port: int, key_path: str | None
+) -> tuple[bool, float | None, str | None]:
     inv = {"all": {"hosts": {ip: {
-        "ansible_host": ip, "ansible_user": ssh_user, "ansible_port": ssh_port,
+        "ansible_host": ip,
+        "ansible_user": ssh_user,
+        "ansible_port": ssh_port,
         **({"ansible_ssh_private_key_file": key_path} if key_path else {}),
     }}}}
     runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, f"ping-{uuid.uuid4()}")
@@ -449,8 +489,13 @@ async def ping_host(ip: str, ssh_user: str, ssh_port: int, key_path: str | None)
     t0 = time.monotonic()
 
     def _ping():
-        r = ansible_runner.run(private_data_dir=runner_dir, host_pattern="all",
-                               module="ping", inventory=inv, quiet=True)
+        r = ansible_runner.run(
+            private_data_dir=runner_dir,
+            host_pattern="all",
+            module="ping",
+            inventory=inv,
+            quiet=True,
+        )
         return r.rc, r.stdout.read() if r.stdout else ""
 
     rc, stdout = await asyncio.get_running_loop().run_in_executor(None, _ping)

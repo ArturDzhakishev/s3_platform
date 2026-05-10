@@ -28,9 +28,12 @@ class HostIn(BaseModel):
     ssh_user:            str         = Field(default="ubuntu")
     ssh_port:            int         = Field(default=22, ge=1, le=65535)
     ssh_private_key_path: str | None = None
-    role:                str         = Field(default="worker", examples=["master", "worker"])
-    # SeaweedFS-специфичные поля
-    groups:              list[str]   = Field(
+    ssh_private_key:     str | None  = Field(
+        default=None,
+        description="PEM-содержимое приватного ключа. Используется если ключа нет на сервере платформы.",
+    )
+    role:    str       = Field(default="worker", examples=["master", "worker"])
+    groups:  list[str] = Field(
         default_factory=list,
         description=(
             "Ansible-группы в которые входит нода. "
@@ -41,7 +44,6 @@ class HostIn(BaseModel):
         ),
         examples=[["seaweedfs", "s3"], ["seaweedfs"], ["garage"]],
     )
-    # Garage-специфичные поля
     zone:     str | None = Field(
         default=None,
         description="Garage: зона размещения ноды (например zone1, dc1). По умолчанию — default.",
