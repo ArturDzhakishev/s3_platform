@@ -1,4 +1,5 @@
 services:
+  # ── MongoDB ────────────────────────────────────────────────────────────────
   mongo:
     image: mongo:7
     container_name: mongo
@@ -34,6 +35,53 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
- 
+
+  # ── Backend ────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: ./app/Dockerfile
+    container_name: s3platform-backend
+    restart: unless-stopped
+    environment:
+      MONGODB_URL: mongodb://s3platform:s3platform@mongo:27017/s3platform
+      MONGODB_DB: s3platform
+      ANSIBLE_PLAYBOOKS_DIR: /app/ansible
+      ANSIBLE_RUNNER_BASE_DIR: /tmp/ansible-runner
+      DEBUG: ${DEBUG:-false}
+    volumes:
+      # Ansible runner артефакты (логи, inventory, ssh-ключи)
+      - ansible_runner:/tmp/ansible-runner
+      # SSH ключи с хоста (для доступа к нодам кластера)
+      - ${SSH_KEYS_DIR:-~/.ssh}:/root/.ssh:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/playbooks"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Frontend ───────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend         # папка с React-проектом
+      dockerfile: Dockerfile
+      args:
+        # В продакшене VITE_BACKEND_URL не нужен — nginx проксирует /api → backend
+        VITE_BACKEND_URL: ""
+    container_name: s3platform-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   mongo_data:
+  ansible_runner:
