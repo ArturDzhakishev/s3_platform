@@ -32,7 +32,8 @@ async def create_cluster(
         "host_ids":      host_ids,
         "node_count":    len(host_ids),
         "extra_vars":    extra_vars,
-        "s3_endpoint":   None,      # заполняется после успешного деплоя
+        "s3_endpoint":   None,
+        "credentials":   None,
         "error_msg":     None,
         "deploy_job_id": deploy_job_id,
         "created_at":    _now(),

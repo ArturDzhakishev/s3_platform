@@ -11,3 +11,49 @@
     name: seaweed-s3
     enabled: yes
     state: started
+
+- name: Configure S3 user via weed shell
+  ansible.builtin.shell: |
+    echo "s3.configure \
+      -user {{ s3_admin_user }} \
+      -access_key {{ s3_access_key }} \
+      -secret_key {{ s3_secret_key }} \
+      -actions {{ s3_actions }} \
+      -apply" | /usr/local/bin/weed shell -filer=127.0.0.1:{{ filer_port }}
+  register: s3_configure_result
+  changed_when: true
+
+- name: Show weed shell output
+  ansible.builtin.debug:
+    msg: "{{ s3_configure_result.stdout_lines }}"
+ 
+- name: Fail if s3.configure reported an error
+  ansible.builtin.fail:
+    msg: "s3.configure failed: {{ s3_configure_result.stderr }}"
+  when: s3_configure_result.rc != 0
+ 
+- name: Ensure output directory exists on control node
+  ansible.builtin.file:
+    path: "{{ s3_credentials_output_dir }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+  run_once: true
+ 
+- name: Save credentials JSON to control node
+  ansible.builtin.copy:
+    content: "{{ _s3_credentials | to_nice_json }}"
+    dest: "{{ s3_credentials_output_dir }}/{{ s3_admin_user }}_keys.json"
+    mode: '0600'
+  vars:
+    _s3_credentials:
+      user: "{{ s3_admin_user }}"
+      access_key: "{{ s3_access_key }}"
+      secret_key: "{{ s3_secret_key }}"
+      actions: "{{ s3_actions }}"
+      s3_endpoint: "http://{{ ansible_host }}:{{ s3_port }}"
+      created_at: "{{ ansible_date_time.iso8601 }}"
+  delegate_to: localhost
+  become: false
+  run_once: true

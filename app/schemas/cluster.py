@@ -36,6 +36,7 @@ class ClusterResponse(BaseModel):
     node_count:    int
     extra_vars:    dict[str, Any]
     s3_endpoint:   str | None
+    credentials:   dict[str, Any] | None = None
     error_msg:     str | None
     deploy_job_id: str
     created_at:    datetime

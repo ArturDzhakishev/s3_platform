@@ -72,7 +72,7 @@ function SshKeyField({ host, onChange }) {
             : <span className="text-xs text-muted">Файл не выбран</span>
           }
           <input ref={fileRef} type="file" className="hidden"
-            accept="*" onChange={handleFile} />
+            accept=".pem,.key,*" onChange={handleFile} />
         </div>
       )}
     </div>
@@ -80,6 +80,90 @@ function SshKeyField({ host, onChange }) {
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
+
+// ── Credentials card ──────────────────────────────────────────────────────
+function CredentialsCard({ credentials, engine }) {
+  const [visible, setVisible] = useState({})
+
+  function toggle(key) {
+    setVisible(v => ({ ...v, [key]: !v[key] }))
+  }
+
+  function copy(val) {
+    navigator.clipboard.writeText(val)
+  }
+
+  // Определить какие поля показывать по движку
+  const fields = engine === 'ceph'
+    ? [
+        { key: 'user',       label: 'Пользователь' },
+        { key: 'access_key', label: 'Access Key',  secret: false },
+        { key: 'secret_key', label: 'Secret Key',  secret: true  },
+      ]
+    : engine === 'seaweedfs'
+    ? [
+        { key: 'user',        label: 'Пользователь' },
+        { key: 'access_key',  label: 'Access Key',  secret: false },
+        { key: 'secret_key',  label: 'Secret Key',  secret: true  },
+        { key: 's3_endpoint', label: 'S3 Endpoint', secret: false },
+        { key: 'actions',     label: 'Права',       secret: false },
+      ]
+    : [
+        { key: 'access_key', label: 'Access Key', secret: false },
+        { key: 'secret_key', label: 'Secret Key', secret: true  },
+      ]
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-3">
+        <h2 className="text-sm font-semibold text-text">Ключи доступа S3</h2>
+        <span className="badge bg-green/10 text-green border-green/20 text-xs">
+          ✓ готово к использованию
+        </span>
+      </div>
+      <div className="divide-y divide-border">
+        {fields.map(({ key, label, secret }) => {
+          const val = credentials[key]
+          if (!val) return null
+          const shown = !secret || visible[key]
+          return (
+            <div key={key} className="flex items-center gap-4 px-5 py-3">
+              <div className="text-xs text-muted w-32 shrink-0">{label}</div>
+              <div className="flex-1 font-mono text-sm text-text overflow-hidden">
+                {shown
+                  ? <span className="break-all">{val}</span>
+                  : <span className="tracking-widest text-muted">{'•'.repeat(Math.min(val.length, 32))}</span>
+                }
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {secret && (
+                  <button onClick={() => toggle(key)}
+                    className="text-xs text-muted hover:text-text transition-colors px-2 py-1 rounded hover:bg-white/5">
+                    {visible[key] ? 'Скрыть' : 'Показать'}
+                  </button>
+                )}
+                <button onClick={() => copy(val)}
+                  className="text-xs text-muted hover:text-blue transition-colors px-2 py-1 rounded hover:bg-white/5">
+                  Копировать
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {/* aws cli пример */}
+      <div className="px-5 py-4 border-t border-border bg-bg/50">
+        <div className="text-xs text-muted mb-2 uppercase tracking-wider">Пример подключения</div>
+        <pre className="text-xs font-mono text-muted whitespace-pre-wrap break-all">
+{`aws --endpoint-url ${credentials.s3_endpoint || 'http://<S3_ENDPOINT>'} \
+    --region us-east-1 \
+    s3 ls`}
+        </pre>
+      </div>
+    </div>
+  )
+}
+
 export function ClusterDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -249,6 +333,11 @@ export function ClusterDetail() {
         <div className="text-xs text-muted uppercase tracking-wider mb-2">Cluster ID</div>
         <div className="font-mono text-sm text-text select-all">{cluster.cluster_id}</div>
       </div>
+
+      {/* Credentials */}
+      {cluster.credentials && (
+        <CredentialsCard credentials={cluster.credentials} engine={cluster.engine} />
+      )}
 
       {/* extra_vars */}
       {cluster.extra_vars && Object.keys(cluster.extra_vars).length > 0 && (

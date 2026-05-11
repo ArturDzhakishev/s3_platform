@@ -1,26 +1,16 @@
 """
 Ansible runner service.
-
-При deploy записывает данные в три коллекции MongoDB:
-
-  hosts    ← upsert каждого хоста (ip уникален), статус → in_use
-  clusters ← новый документ, статус deploying
-  jobs     ← новый документ, cluster_id = cluster_id
-
-После выполнения плейбука фоновая корутина (_bg) обновляет:
-  jobs     ← status, return_code, log, finished_at
-  clusters ← status (ready / failed), s3_endpoint, error_msg
-  hosts    ← (при teardown) status → available, cluster_id → None
 """
 from __future__ import annotations
 
 import asyncio
+import functools
+import glob
+import json
 import logging
 import os
 import time
 import uuid
-import functools
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -67,23 +57,15 @@ def _write_key_files(hosts: list[dict], keys_dir: str) -> list[dict]:
         result.append(h)
     return result
 
+
 # ── Inventory ─────────────────────────────────────────────────────────────────
 
 def build_inventory(
     hosts:      list[dict],
     engine:     str = "",
     runner_dir: str = "",
-    new_ips:    set[str] | None = None,   # IP новых нод для группы new_workers
+    new_ips:    set[str] | None = None,
 ) -> str:
-    """
-    Генерирует hosts.ini и записывает в runner_dir/inventory/hosts.ini.
-    Возвращает путь к файлу.
-
-    Группы по движкам:
-      ceph      — [master], [workers], [new_workers]
-      seaweedfs — [seaweedfs], [s3], [loadbalancer]
-      garage    — [garage], [new_nodes]
-    """
     master_h  = next((h for h in hosts if h.get("role") == "master"), hosts[0])
     master_ip = master_h["ip"]
     worker_hs = [h for h in hosts if h["ip"] != master_ip]
@@ -97,43 +79,33 @@ def build_inventory(
         lines = ["[master]", host_line(master_name, master_ip), "[workers]"]
         for h in worker_hs:
             lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
-        # new_workers — только добавляемые ноды, для scale_ceph.yml
         lines.append("[new_workers]")
-        new_worker_hs = [h for h in worker_hs if h["ip"] in new_ips]
-        for h in new_worker_hs:
-            lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
+        for h in worker_hs:
+            if h["ip"] in new_ips:
+                lines.append(host_line(h.get("label", h["ip"]), h["ip"]))
         groups_ini = "\n".join(lines)
 
     elif engine == "seaweedfs":
-        # Имя ноды — из label, стабильно между deploy и scale
         names = {h["ip"]: h.get("label", f"node{i}") for i, h in enumerate(hosts, start=1)}
         all_groups = ["seaweedfs", "s3", "loadbalancer"]
-        # Построить маппинг группа → список хостов
         group_map: dict[str, list[dict]] = {g: [] for g in all_groups}
-        
         for h in hosts:
             custom = h.get("groups", [])
             if custom:
-                # Клиент явно указал группы
                 for g in custom:
                     if g in group_map:
                         group_map[g].append(h)
             else:
-                # Дефолт: все ноды в seaweedfs,
-                # мастер в s3 и loadbalancer
                 group_map["seaweedfs"].append(h)
                 if h["ip"] == master_ip:
                     group_map["s3"].append(h)
                     group_map["loadbalancer"].append(h)
-
-        # Гарантировать: нода в s3/loadbalancer всегда и в seaweedfs
         seaweedfs_ips = {h["ip"] for h in group_map["seaweedfs"]}
         for g in ("s3", "loadbalancer"):
             for h in group_map[g]:
                 if h["ip"] not in seaweedfs_ips:
                     group_map["seaweedfs"].append(h)
                     seaweedfs_ips.add(h["ip"])
-
         lines = []
         for g in all_groups:
             lines.append(f"[{g}]")
@@ -142,15 +114,11 @@ def build_inventory(
         groups_ini = "\n".join(lines)
 
     elif engine == "garage":
-        # workers первыми, master последним — как в эталонном hosts.ini
         ordered = worker_hs + [master_h]
-        # имя из label — стабильно между deploy и scale (не по индексу!)
         names = {h["ip"]: h.get("label", h["ip"]) for h in ordered}
         lines = ["[garage]"]
         for h in ordered:
             lines.append(host_line(names[h["ip"]], h["ip"]))
-        # [new_nodes] — только добавляемые ноды (для scale_garage.yml)
-        # при deploy new_ips пустой — группа будет пустой, плейбук её проигнорирует
         lines.append("[new_nodes]")
         for h in ordered:
             if h["ip"] in new_ips:
@@ -171,16 +139,65 @@ def build_inventory(
         "ansible_python_interpreter=/usr/bin/python3",
     ]
     if first.get("ssh_private_key_path"):
-        vars_lines.append(f"ansible_ssh_private_key_file={first['ssh_private_key_path']}")
+        vars_lines.append(
+            f"ansible_ssh_private_key_file={first['ssh_private_key_path']}"
+        )
 
     ini = groups_ini + "\n" + "\n".join(vars_lines) + "\n"
-
     inv_dir = Path(runner_dir) / "inventory"
     inv_dir.mkdir(parents=True, exist_ok=True)
     inv_path = inv_dir / "hosts.ini"
     inv_path.write_text(ini)
     log.debug("Inventory:\n%s", ini)
     return str(inv_path)
+
+
+def _read_credentials(engine: str, playbooks_dir: str) -> dict | None:
+    """
+    Читает файл с ключами из папки output движка после успешного деплоя.
+
+    Ceph:      {playbooks_dir}/ceph/output/*_keys.json       → поле "keys[0]"
+    SeaweedFS: {playbooks_dir}/seaweedfs/output/*_keys.json  → весь файл
+    Garage:    {playbooks_dir}/garage/output/garage_keys.json → весь файл
+    """
+    output_dir = os.path.join(playbooks_dir, engine, "output")
+    try:
+        if engine == "ceph":
+            files = glob.glob(os.path.join(output_dir, "*_keys.json"))
+            if not files:
+                log.warning("Ceph: файл ключей не найден в %s", output_dir)
+                return None
+            with open(files[0]) as f:
+                data = json.load(f)
+            keys = data.get("keys", [])
+            if not keys:
+                return None
+            return {
+                "access_key": keys[0].get("access_key"),
+                "secret_key": keys[0].get("secret_key"),
+                "user":       keys[0].get("user"),
+            }
+
+        elif engine == "seaweedfs":
+            files = glob.glob(os.path.join(output_dir, "*_keys.json"))
+            if not files:
+                log.warning("SeaweedFS: файл ключей не найден в %s", output_dir)
+                return None
+            with open(files[0]) as f:
+                return json.load(f)
+
+        elif engine == "garage":
+            path = os.path.join(output_dir, "garage_keys.json")
+            if not os.path.isfile(path):
+                log.warning("Garage: файл ключей не найден: %s", path)
+                return None
+            with open(path) as f:
+                return json.load(f)
+
+    except Exception as exc:
+        log.warning("Не удалось прочитать ключи для %s: %s", engine, exc)
+    return None
+
 
 
 def _s3_endpoint(engine: str, hosts: list[dict]) -> str | None:
@@ -194,18 +211,15 @@ def _s3_endpoint(engine: str, hosts: list[dict]) -> str | None:
     port = ports.get(engine, 80)
     return f"http://{master_ip}:{port}"
 
-# ── Sync runner (thread pool) ─────────────────────────────────────────────────
+
+# ── Sync runner ───────────────────────────────────────────────────────────────
 
 def _run_sync(
     playbook_path: str,
-    inventory:     str | dict,
+    inventory:     str,
     runner_dir:    str,
     extra_vars:    dict | None = None,
 ) -> tuple[int, str]:
-    """
-    Запускает плейбук синхронно (вызывается из thread pool).
-    extra_vars передаются через extravars ansible-runner.
-    """
     Path(runner_dir).mkdir(parents=True, exist_ok=True)
     r = ansible_runner.run(
         private_data_dir=runner_dir,
@@ -233,12 +247,8 @@ async def run_deploy_async(
     extra_vars: dict[str, Any],
     name:       str = "",
 ) -> tuple[str, str]:
-    """
-    Сохранить hosts / cluster / job в MongoDB, запустить деплой в фоне.
-    Возвращает (cluster_id, job_id).
-    """
-    pb_path   = _playbook_path(engine, "deploy")
-    pb_name   = f"deploy_{engine}.yml"
+    pb_path    = _playbook_path(engine, "deploy")
+    pb_name    = f"deploy_{engine}.yml"
     cluster_id = str(uuid.uuid4())
     job_id     = str(uuid.uuid4())
 
@@ -254,7 +264,6 @@ async def run_deploy_async(
             },
         }
 
-    # 1. Upsert хостов в MongoDB
     host_ids: list[str] = []
     for h in hosts:
         hid = await upsert_host(
@@ -270,7 +279,6 @@ async def run_deploy_async(
         )
         host_ids.append(hid)
 
-    # 2. Создать документ кластера
     await create_cluster(
         cluster_id=cluster_id,
         name=name or f"{engine}-{cluster_id[:8]}",
@@ -280,7 +288,6 @@ async def run_deploy_async(
         deploy_job_id=job_id,
     )
 
-    # 3. Создать документ job
     await create_job(
         job_id=job_id,
         cluster_id=cluster_id,
@@ -290,7 +297,6 @@ async def run_deploy_async(
         extra_vars=extra_vars,
     )
 
-    # 4. Запустить плейбук в фоне
     async def _bg() -> None:
         await set_running(job_id)
         log.info("Deploy %s → running  cluster=%s", job_id, cluster_id)
@@ -312,7 +318,17 @@ async def run_deploy_async(
             return
         await set_finished(job_id, rc=rc, log=stdout)
         if rc == 0:
-            await set_cluster_ready(cluster_id, s3_endpoint=_s3_endpoint(engine, hosts))
+            s3ep = _s3_endpoint(engine, hosts)
+            await set_cluster_ready(cluster_id, s3_endpoint=s3ep)
+            # Прочитать ключи из output-файла плейбука и сохранить в кластер
+            creds = _read_credentials(engine, settings.ANSIBLE_PLAYBOOKS_DIR)
+            if creds:
+                from app.db.mongo import get_clusters_collection
+                await get_clusters_collection().update_one(
+                    {"cluster_id": cluster_id},
+                    {"$set": {"credentials": creds}},
+                )
+                log.info("Deploy %s → credentials сохранены", job_id)
             log.info("Deploy %s → success", job_id)
         else:
             await set_cluster_status(cluster_id, ClusterStatus.failed, error_msg=f"rc={rc}")
@@ -321,9 +337,15 @@ async def run_deploy_async(
     asyncio.create_task(_bg(), name=f"deploy-{job_id}")
     return cluster_id, job_id
 
+
 # ── Teardown ──────────────────────────────────────────────────────────────────
 
-async def run_teardown_async(cluster_id: str, engine: str, hosts: list[dict], extra_vars: dict) -> str:
+async def run_teardown_async(
+    cluster_id: str,
+    engine:     str,
+    hosts:      list[dict],
+    extra_vars: dict,
+) -> str:
     pb_path = _playbook_path(engine, "teardown")
     pb_name = f"teardown_{engine}.yml"
     job_id  = str(uuid.uuid4())
@@ -365,41 +387,28 @@ async def run_teardown_async(cluster_id: str, engine: str, hosts: list[dict], ex
     asyncio.create_task(_bg(), name=f"teardown-{job_id}")
     return job_id
 
+
 # ── Scale ─────────────────────────────────────────────────────────────────────
 
 async def run_scale_async(
     cluster_id: str,
     engine:     str,
-    hosts:      list[dict],        # все ноды (старые + новые)
-    new_hosts:  list[dict],        # только новые — для передачи в extra_vars
+    hosts:      list[dict],
+    new_hosts:  list[dict],
     extra_vars: dict,
 ) -> str:
-    """
-    Масштабирование — запуск scale_{engine}.yml с обновлённым инвентарём.
-
-    Новые ноды передаются в extra_vars как new_nodes_ips (список IP).
-    Плейбук использует эту переменную чтобы ограничить деструктивные
-    задачи (зачистка диска, инициализация OSD) только новыми нодами:
-
-        when: inventory_hostname in new_nodes_ips
-
-    Существующие ноды Ansible проверит но диски не тронет.
-    """
     pb_path = _playbook_path(engine, "scale")
     pb_name = f"scale_{engine}.yml"
     job_id  = str(uuid.uuid4())
 
-    # IP новых нод — передадим в плейбук
     new_nodes_ips = [h["ip"] for h in new_hosts]
 
-    # Объединить extra_vars с информацией о новых нодах
     scale_vars = {
         **extra_vars,
-        "new_nodes_ips": new_nodes_ips,   # используется в when: условиях плейбука
-        "is_scale":      True,             # флаг для плейбука: режим масштабирования
+        "new_nodes_ips": new_nodes_ips,
+        "is_scale":      True,
     }
 
-    # Garage: пересобрать garage_nodes_config со всеми нодами (старые + новые)
     if engine == "garage":
         scale_vars["garage_nodes_config"] = {
             h.get("label", h["ip"]): {
@@ -409,7 +418,6 @@ async def run_scale_async(
             for h in hosts
         }
 
-    # Upsert всех нод (новые создадутся, старые обновятся)
     host_ids: list[str] = []
     for h in hosts:
         hid = await upsert_host(
@@ -425,7 +433,6 @@ async def run_scale_async(
         )
         host_ids.append(hid)
 
-    # Обновить host_ids и node_count в документе кластера
     from app.db.mongo import get_clusters_collection
     await get_clusters_collection().update_one(
         {"cluster_id": cluster_id},
@@ -448,9 +455,16 @@ async def run_scale_async(
 
     async def _bg() -> None:
         await set_running(job_id)
-        log.info("Scale %s → running  cluster=%s new_nodes=%s", job_id, cluster_id, new_nodes_ips)
-        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, job_id)
-        inventory  = build_inventory(hosts, engine=engine, runner_dir=runner_dir, new_ips=set(new_nodes_ips))
+        log.info("Scale %s → running  cluster=%s new=%s", job_id, cluster_id, new_nodes_ips)
+        runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, job_id)
+        keys_dir   = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, "keys")
+        # _write_key_files обрабатывает все хосты:
+        # - старые из MongoDB: уже имеют ssh_private_key_path → оставляет как есть
+        # - новые из запроса: могут иметь ssh_private_key (PEM) → пишет в keys_dir
+        prepared  = _write_key_files(hosts, keys_dir)
+        inventory = build_inventory(
+            prepared, engine=engine, runner_dir=runner_dir, new_ips=set(new_nodes_ips)
+        )
         loop = asyncio.get_running_loop()
         try:
             rc, stdout = await loop.run_in_executor(
@@ -472,6 +486,7 @@ async def run_scale_async(
 
     asyncio.create_task(_bg(), name=f"scale-{job_id}")
     return job_id
+
 
 # ── Ping ──────────────────────────────────────────────────────────────────────
 

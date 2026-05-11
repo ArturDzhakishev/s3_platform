@@ -1,0 +1,45 @@
+{
+    "account_id": "",
+    "bucket_quota": {
+        "check_on_raw": false,
+        "enabled": false,
+        "max_objects": -1,
+        "max_size": -1,
+        "max_size_kb": 0
+    },
+    "caps": [],
+    "create_date": "2026-05-11T17:49:19.262739Z",
+    "default_placement": "",
+    "default_storage_class": "",
+    "display_name": "S3 User4",
+    "email": "",
+    "group_ids": [],
+    "keys": [
+        {
+            "access_key": "1QKP83SF56FSBD1RQ5AH",
+            "active": true,
+            "create_date": "2026-05-11T17:49:19.272425Z",
+            "secret_key": "UGPAduT3AJXmXKNp7elAgGr2qIYsDH2qsdAKUeOZ",
+            "user": "s3user4"
+        }
+    ],
+    "max_buckets": 1000,
+    "mfa_ids": [],
+    "op_mask": "read, write, delete",
+    "path": "/",
+    "placement_tags": [],
+    "subusers": [],
+    "suspended": 0,
+    "swift_keys": [],
+    "tags": [],
+    "temp_url_keys": [],
+    "type": "rgw",
+    "user_id": "s3user4",
+    "user_quota": {
+        "check_on_raw": false,
+        "enabled": false,
+        "max_objects": -1,
+        "max_size": -1,
+        "max_size_kb": 0
+    }
+}

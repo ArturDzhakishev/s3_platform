@@ -216,7 +216,7 @@ function CreateClusterForm({ onCreated, onCancel }) {
       zone: 'zone1', capacity: '1G', _keyMode: 'path',
     },
     {
-      label: 'node-033', ip: '192.168.1.113', ssh_user: 'user', ssh_port: 22,
+      label: 'node-03', ip: '192.168.1.113', ssh_user: 'user', ssh_port: 22,
       ssh_private_key_path: '/home/user/.ssh/ceph', ssh_private_key: '',
       role: 'worker', groups: ['seaweedfs'],
       zone: 'zone1', capacity: '1G', _keyMode: 'path',

@@ -10,13 +10,6 @@
       environment:
         CEPH_CONF: /etc/ceph/ceph.conf
 
-    # - name: Check if RGW user exists
-    #   ansible.builtin.command: >
-    #     cephadm shell -- radosgw-admin user info --uid={{ rgw_user_uid }}
-    #   register: rgw_user_info
-    #   failed_when: false
-    #   changed_when: false
-
     # Если пользователь существует — парсим JSON
     - name: Parse existing RGW user info
       ansible.builtin.set_fact:
@@ -26,24 +19,30 @@
     # Создание пользователя
     - name: Create RGW user
       ansible.builtin.command: >
-        cephadm shell -- radosgw-admin user create
+        radosgw-admin user create
         --uid={{ rgw_user_uid }}
         --display-name="{{ rgw_user_display_name }}"
-      when: rgw_user_info.rc != 0
-      changed_when: true
       register: rgw_user_create
+      changed_when: true
+      timeout: 30
+      environment:
+        CEPH_CONF: /etc/ceph/ceph.conf
+      when: rgw_user_info.rc != 0
 
     # Обновление display-name (если изменился)
     - name: Update RGW user display name
       ansible.builtin.command: >
-        cephadm shell -- radosgw-admin user modify
+        radosgw-admin user modify
         --uid={{ rgw_user_uid }}
         --display-name="{{ rgw_user_display_name }}"
+      register: rgw_user_modify
+      changed_when: true
+      timeout: 30
+      environment:
+        CEPH_CONF: /etc/ceph/ceph.conf
       when:
         - rgw_user_info.rc == 0
         - rgw_user_existing.display_name != rgw_user_display_name
-      register: rgw_user_modify
-      changed_when: true
 
     # Формируем единую переменную с данными пользователя
     - name: Set RGW user data for file
@@ -55,11 +54,23 @@
             else rgw_user_existing
           }}
 
-    - name: Save keys to file
+    # Сохранить файл на control node (откуда запускается плейбук)
+    - name: Ensure local output directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/output"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+
+    - name: Save keys to local file
       ansible.builtin.copy:
         content: "{{ rgw_user_data | to_nice_json }}"
-        dest: "/root/{{ rgw_user_uid }}_keys.json"
-        mode: '0600'
+        dest: "{{ playbook_dir }}/output/{{ rgw_user_uid }}_keys.json"
+        mode: '0666'
+      delegate_to: localhost
+      when: inventory_hostname in groups['master']
+
 
   when: inventory_hostname in groups['master']
   become: true
