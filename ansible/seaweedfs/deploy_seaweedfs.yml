@@ -8,7 +8,7 @@
     - seaweedfs_volume
     - seaweedfs_filer
 
-- name: Deploy S3 only on first node
+- name: Deploy S3 on node
   hosts: s3
   become: yes
 

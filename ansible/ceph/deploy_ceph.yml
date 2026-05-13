@@ -2,6 +2,7 @@
 - name: Create S3 storage on Ceph
   hosts: all
   become: yes
+  any_errors_fatal: true 
   roles:
     - ceph_hosts
     - passwordless
@@ -10,7 +11,5 @@
     - ssh-keys
     - add_hosts
     - add_osds
-    - role: create_rgw
-      tags: rgw
-    - role: add_s3user
-      tags: rgw
+    - create_rgw
+    - add_s3user

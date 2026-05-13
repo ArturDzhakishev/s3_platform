@@ -27,7 +27,6 @@ class HostIn(BaseModel):
     ip:                  str         = Field(..., examples=["192.168.1.110"])
     ssh_user:            str         = Field(default="ubuntu")
     ssh_port:            int         = Field(default=22, ge=1, le=65535)
-    ssh_private_key_path: str | None = None
     ssh_private_key:     str | None  = Field(
         default=None,
         description="PEM-содержимое приватного ключа. Используется если ключа нет на сервере платформы.",

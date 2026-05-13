@@ -1,4 +1,7 @@
 /venv
-/backend/ansible/ceph/ceph.tar
-/backend/ansible/ceph/group_vars/all.yml
+./backend/ansible/ceph/ceph.tar
+./backend/ansible/ceph/group_vars/all.yml
 __pycache__
+./ansible/ceph/output
+./ansible/seaweedfs/output
+./ansible/garage/output

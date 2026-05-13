@@ -1,8 +1,0 @@
-{
-    "access_key": "admin",
-    "actions": "Admin,Read,Write,List,Tagging",
-    "created_at": "2026-05-11T17:10:28Z",
-    "s3_endpoint": "http://192.168.1.110:8333",
-    "secret_key": "secretkey",
-    "user": "admin"
-}

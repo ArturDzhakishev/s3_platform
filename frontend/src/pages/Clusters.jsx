@@ -17,10 +17,10 @@ function emptyHost(role = 'worker', engine = 'seaweedfs', index = 0) {
   }
   return {
     label: '', ip: '', ssh_user: 'user', ssh_port: 22,
-    ssh_private_key_path: '', ssh_private_key: '',
+    ssh_private_key: '',
     role, groups: defaultGroups[engine] || [],
     zone: 'zone1', capacity: '1G',
-    _keyMode: 'path',
+    _keyMode: 'paste',
   }
 }
 
@@ -42,7 +42,7 @@ function SshKeyField({ host, onChange }) {
       <div className="flex items-center gap-1 mb-1.5">
         <span className="label mb-0">SSH ключ</span>
         <div className="ml-2 flex rounded overflow-hidden border border-border text-xs">
-          {[['path', 'Путь'], ['paste', 'Вставить'], ['file', 'Файл']].map(([mode, label]) => (
+          {[['paste', 'Вставить'], ['file', 'Файл']].map(([mode, label]) => (
             <button key={mode} type="button"
               onClick={() => onChange('_keyMode', mode)}
               className={`px-2.5 py-1 transition-colors ${
@@ -56,7 +56,7 @@ function SshKeyField({ host, onChange }) {
         </div>
       </div>
 
-      {host._keyMode === 'path' && (
+      {host._keyMode === 'paste' && (
         <input className="input text-xs font-mono"
           placeholder="/home/user/.ssh/id_rsa"
           value={host.ssh_private_key_path}
@@ -205,19 +205,19 @@ function CreateClusterForm({ onCreated, onCancel }) {
   const [hosts, setHosts]   = useState([
     {
       label: 'node-master', ip: '192.168.1.110', ssh_user: 'user', ssh_port: 22,
-      ssh_private_key_path: '/home/user/.ssh/ceph', ssh_private_key: '',
+      ssh_private_key: '',
       role: 'master', groups: ['seaweedfs', 's3', 'loadbalancer'],
       zone: 'zone1', capacity: '1G', _keyMode: 'path',
     },
     {
       label: 'node-02', ip: '192.168.1.112', ssh_user: 'user', ssh_port: 22,
-      ssh_private_key_path: '/home/user/.ssh/ceph', ssh_private_key: '',
+      ssh_private_key: '',
       role: 'worker', groups: ['seaweedfs', 's3'],
       zone: 'zone1', capacity: '1G', _keyMode: 'path',
     },
     {
       label: 'node-03', ip: '192.168.1.113', ssh_user: 'user', ssh_port: 22,
-      ssh_private_key_path: '/home/user/.ssh/ceph', ssh_private_key: '',
+      ssh_private_key: '',
       role: 'worker', groups: ['seaweedfs'],
       zone: 'zone1', capacity: '1G', _keyMode: 'path',
     },

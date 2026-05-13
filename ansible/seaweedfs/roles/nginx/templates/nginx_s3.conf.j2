@@ -1,5 +1,4 @@
 upstream seaweedfs_s3_backends {
-    # Рекомендуется использовать keepalive для S3, чтобы не переоткрывать TCP-соединения
     keepalive 32;
 
     {% for backend in nginx_s3_backends %}

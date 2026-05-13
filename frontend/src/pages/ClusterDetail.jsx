@@ -8,9 +8,9 @@ import { EngineBadge } from '../components/EngineBadge'
 function emptyHost() {
   return {
     label: '', ip: '', ssh_user: 'user', ssh_port: 22,
-    ssh_private_key_path: '', ssh_private_key: '',
+    ssh_private_key: '',
     role: 'worker', groups: [], zone: 'zone1', capacity: '1G',
-    _keyMode: 'path',
+    _keyMode: 'paste',
   }
 }
 
@@ -32,7 +32,7 @@ function SshKeyField({ host, onChange }) {
       <div className="flex items-center gap-1 mb-2">
         <span className="label mb-0">SSH ключ</span>
         <div className="ml-2 flex rounded overflow-hidden border border-border text-xs">
-          {[['path', 'Путь'], ['paste', 'Вставить'], ['file', 'Файл']].map(([mode, label]) => (
+          {[['paste', 'Вставить'], ['file', 'Файл']].map(([mode, label]) => (
             <button key={mode} type="button"
               onClick={() => onChange('_keyMode', mode)}
               className={`px-2.5 py-1 transition-colors ${
@@ -72,7 +72,7 @@ function SshKeyField({ host, onChange }) {
             : <span className="text-xs text-muted">Файл не выбран</span>
           }
           <input ref={fileRef} type="file" className="hidden"
-            accept=".pem,.key,*" onChange={handleFile} />
+            accept="*" onChange={handleFile} />
         </div>
       )}
     </div>
@@ -239,11 +239,7 @@ export function ClusterDetail() {
       }
 
       // Передать ключ в зависимости от режима
-      if (newHost._keyMode === 'path') {
-        hostPayload.ssh_private_key_path = newHost.ssh_private_key_path || null
-      } else {
-        hostPayload.ssh_private_key = newHost.ssh_private_key || null
-      }
+      hostPayload.ssh_private_key = newHost.ssh_private_key || null
 
       await api.clusters.scale(id, { new_hosts: [hostPayload] })
       setScaleOpen(false)

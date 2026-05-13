@@ -34,26 +34,20 @@ settings = get_settings()
 
 def _write_key_files(hosts: list[dict], keys_dir: str) -> list[dict]:
     """
-    Если хост передал PEM-содержимое (ssh_private_key) вместо пути,
-    записать его в keys_dir/key_{i} с правами 0600.
-
-    keys_dir должен существовать всё время работы плейбука —
-    используй постоянную директорию (runner_dir/keys/), а не TemporaryDirectory.
+    Записывает PEM-содержимое ключа (ssh_private_key) в файл keys_dir/key_{i}.
+    Возвращает список хостов с заполненным ssh_private_key_path.
     """
     Path(keys_dir).mkdir(parents=True, exist_ok=True)
     result = []
     for i, h in enumerate(hosts):
         h = dict(h)
         pem = h.get("ssh_private_key")
-        has_path = bool(h.get("ssh_private_key_path"))
-        if pem and not has_path:
-            # Файл без расширения — Ansible не требует расширения
+        if pem:
             key_path = os.path.join(keys_dir, f"key_{i}")
             with open(key_path, "w") as f:
                 f.write(pem)
             os.chmod(key_path, 0o600)
             h["ssh_private_key_path"] = key_path
-            log.debug("SSH key written: %s", key_path)
         result.append(h)
     return result
 
@@ -271,7 +265,7 @@ async def run_deploy_async(
             label=h.get("label", h["ip"]),
             ssh_user=h["ssh_user"],
             ssh_port=h["ssh_port"],
-            ssh_private_key_path=h.get("ssh_private_key_path"),
+            ssh_private_key=h.get("ssh_private_key"),
             role=h.get("role", "worker"),
             cluster_id=cluster_id,
             zone=h.get("zone"),
@@ -425,7 +419,7 @@ async def run_scale_async(
             label=h.get("label", h["ip"]),
             ssh_user=h["ssh_user"],
             ssh_port=h["ssh_port"],
-            ssh_private_key_path=h.get("ssh_private_key_path"),
+            ssh_private_key=h.get("ssh_private_key"),
             role=h.get("role", "worker"),
             cluster_id=cluster_id,
             zone=h.get("zone"),
