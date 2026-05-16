@@ -1,6 +1,7 @@
 - name: Deploy Garage cluster
   hosts: garage
   become: yes
+  any_errors_fatal: true 
 
   roles:
     - garage

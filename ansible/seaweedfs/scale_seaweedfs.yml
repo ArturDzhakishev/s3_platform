@@ -1,6 +1,7 @@
 - name: Install SeaweedFS on all nodes
   hosts: seaweedfs
   become: yes
+  any_errors_fatal: true 
 
   roles:
     - seaweedfs_common
@@ -11,6 +12,7 @@
 - name: Deploy S3 only on first node
   hosts: s3
   become: yes
+  any_errors_fatal: true 
 
   roles:
     - seaweedfs_s3
@@ -18,6 +20,7 @@
 - name: Deploy nginx
   hosts: loadbalancer
   become: yes
+  any_errors_fatal: true 
 
   roles:
     - nginx

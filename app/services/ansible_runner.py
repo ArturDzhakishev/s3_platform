@@ -201,7 +201,7 @@ def _s3_endpoint(engine: str, hosts: list[dict]) -> str | None:
     )
     if not master_ip:
         return None
-    ports = {"ceph": 7480, "seaweedfs": 8333, "garage": 3900}
+    ports = {"ceph": 8080, "seaweedfs": 80, "garage": 3900}
     port = ports.get(engine, 80)
     return f"http://{master_ip}:{port}"
 

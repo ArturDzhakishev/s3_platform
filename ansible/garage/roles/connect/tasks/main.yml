@@ -96,6 +96,11 @@
   run_once: true
   when: "'api-key' not in garage_key_list.stdout"
 
+- name: Allow API key to create buckets
+  command: garage key allow --create-bucket api-key
+  delegate_to: "{{ groups['garage'][0] }}"
+  run_once: true
+
 # ── 9. Извлечь ключи ──────────────────────────────────────────────────────
 # Secret key доступен ТОЛЬКО в выводе garage key create.
 # При повторном вызове garage key info он скрыт как (redacted).

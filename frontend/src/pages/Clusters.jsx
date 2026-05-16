@@ -330,7 +330,7 @@ function CreateClusterForm({ onCreated, onCancel }) {
         <div>
           <label className="label">Имя кластера</label>
           <input className="input" value={name} onChange={e => setName(e.target.value)}
-            placeholder="prod-seaweedfs-01" required />
+            placeholder="test-seaweedfs-cluster" required />
         </div>
         <div>
           <label className="label">Движок</label>
