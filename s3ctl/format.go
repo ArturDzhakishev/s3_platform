@@ -70,7 +70,7 @@ func hdr(text string) {
 	sep()
 }
 
-func printCluster(cl ClusterResponse, showSecret bool) {
+func printCluster(cl ClusterResponse) {
 	id := cl.ClusterID
 	if len(id) > 8 {
 		id = id[:8] + "…"
@@ -89,15 +89,7 @@ func printCluster(cl ClusterResponse, showSecret bool) {
 			fmt.Printf("    access_key: %s\n", c(cGreen, ak))
 		}
 		if sk, ok := cl.Credentials["secret_key"].(string); ok {
-			if showSecret {
-				fmt.Printf("    secret_key: %s\n", c(cYellow, sk))
-			} else {
-				masked := sk
-				if len(sk) > 8 {
-					masked = sk[:8] + strings.Repeat("*", len(sk)-8)
-				}
-				fmt.Printf("    secret_key: %s\n", masked)
-			}
+			fmt.Printf("    secret_key: %s\n", c(cYellow, sk))
 		}
 		if user, ok := cl.Credentials["user"].(string); ok && user != "" {
 			fmt.Printf("    user:       %s\n", user)

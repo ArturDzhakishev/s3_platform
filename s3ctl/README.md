@@ -43,14 +43,13 @@ s3ctl cluster list --status ready
 
 # Детали кластера
 s3ctl cluster get <cluster-id>
-s3ctl cluster get <cluster-id> --show-secret   # показать secret_key полностью
 
 # Создать из файла
 s3ctl cluster create --file examples/seaweedfs.yaml
 s3ctl cluster create --file examples/seaweedfs.yaml --watch   # ждать завершения
 
 # Создать из флагов
-# Ceph
+Ceph
 s3ctl cluster create \
   --name prod-ceph-01 \
   --engine ceph \
@@ -64,6 +63,7 @@ s3ctl cluster create \
   --extra "ceph_rgw_enable=true" \
   --watch
 
+SeaweedFS
 s3ctl cluster create \
   --name prod-sw-01 \
   --engine seaweedfs \
@@ -78,13 +78,14 @@ s3ctl cluster create \
   --watch
 
 # Garage (с zone и capacity)
-s3ctl cluster create \
+./s3ctl2 cluster create \
   --name prod-garage \
   --engine garage \
   --node "node1,192.168.1.110" \
   --node "node2,192.168.1.112" \
+  --node "node3,192.168.1.113" \
   --zone zone1 --capacity 2G \
-  --key-file ~/.ssh/id_rsa
+  --key-file ~/.ssh/ceph
 
 # Масштабирование
 s3ctl cluster scale <id> --file examples/scale.yaml --watch
@@ -94,15 +95,22 @@ s3ctl cluster scale <id> \
   --key-file ~/.ssh/ceph \
   --watch
 
+SeaweedFS
 s3ctl cluster scale <id> \
   --node "node4,192.168.1.111" \
   --groups "seaweedfs,s3" \
-  --key-file ~/.ssh/id_rsa \
+  --key-file ~/.ssh/ceph \
   --watch
+
+Garage
+./s3ctl cluster scale <id> \
+  --node "node4,192.168.1.111" \
+  --zone zone1 --capacity 2G \
+  --key-file ~/.ssh/ceph
 
 # Удалить кластер
 s3ctl cluster delete <id>
-s3ctl cluster delete <id> --yes --watch    # без подтверждения
+./s3ctl cluster delete <id> --yes --watch    # без подтверждения
 ```
 
 ### Задачи

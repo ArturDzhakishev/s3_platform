@@ -66,7 +66,7 @@ func cmdClusterList(cl *Client, cfg *Config, args []string) error {
 	}
 	hdr(fmt.Sprintf("Кластеры (%d)", len(clusters)))
 	for _, c := range clusters {
-		printCluster(c, false)
+		printCluster(c)
 		sep()
 	}
 	return nil
@@ -78,8 +78,6 @@ func cmdClusterGet(cl *Client, cfg *Config, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("cluster get <cluster-id>")
 	}
-	showSecret := flagBool(args, "--show-secret")
-
 	data, err := cl.GET("/clusters/" + args[0])
 	if err != nil {
 		return err
@@ -93,7 +91,7 @@ func cmdClusterGet(cl *Client, cfg *Config, args []string) error {
 		return err
 	}
 	hdr("Кластер")
-	printCluster(cluster, showSecret)
+	printCluster(cluster)
 	return nil
 }
 
