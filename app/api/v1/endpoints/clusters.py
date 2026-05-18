@@ -27,30 +27,21 @@ class HostIn(BaseModel):
     ip:                  str         = Field(..., examples=["192.168.1.110"])
     ssh_user:            str         = Field(default="ubuntu")
     ssh_port:            int         = Field(default=22, ge=1, le=65535)
-    ssh_private_key:     str | None  = Field(
-        default=None,
-        description="PEM-содержимое приватного ключа. Используется если ключа нет на сервере платформы.",
-    )
+    ssh_private_key:     str | None  = Field(default=None)
     role:    str       = Field(default="worker", examples=["master", "worker"])
     groups:  list[str] = Field(
         default_factory=list,
-        description=(
-            "Ansible-группы в которые входит нода. "
-            "Если не указано — определяется движком автоматически. "
-            "SeaweedFS: seaweedfs, s3, loadbalancer. "
-            "Ceph: master, workers, new_workers. "
-            "Garage: garage."
-        ),
+        description=("Ansible-группы в которые входит нода."),
         examples=[["seaweedfs", "s3"], ["seaweedfs"], ["garage"]],
     )
     zone:     str | None = Field(
         default=None,
-        description="Garage: зона размещения ноды (например zone1, dc1). По умолчанию — default.",
+        description="Garage: зона размещения",
         examples=["zone1", "dc1", "default"],
     )
     capacity: str | None = Field(
         default=None,
-        description="Garage: ёмкость ноды (например 2G, 500M). По умолчанию — 1G.",
+        description="Garage: ёмкость ноды.",
         examples=["2G", "500M", "1G"],
     )
 
@@ -58,7 +49,17 @@ class CreateClusterRequest(BaseModel):
     name:       str              = Field(..., examples=["prod-ceph-01"])
     engine:     StorageEngine
     hosts:      list[HostIn]    = Field(..., min_length=1)
-    extra_vars: dict[str, Any]  = Field(default_factory=dict)
+    extra_vars: dict[str, Any]  = Field(
+        default_factory=dict, 
+        examples=[
+            {
+                "seaweedfs_version": "3.63",
+                "seaweedfs_master_port": 9333,
+                "seaweedfs_s3_port": 8333,
+                "seaweedfs_volume_size_limit_mb": 30000
+            }
+        ]
+    )
 
 class ScaleRequest(BaseModel):
     """

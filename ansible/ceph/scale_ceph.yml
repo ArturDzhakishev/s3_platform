@@ -1,5 +1,5 @@
 ---
-- name: Create S3 storage on Ceph
+- name: Cluster Ceph scale
   hosts: all
   become: yes
   any_errors_fatal: true 

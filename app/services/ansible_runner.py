@@ -34,7 +34,7 @@ settings = get_settings()
 
 def _write_key_files(hosts: list[dict], keys_dir: str) -> list[dict]:
     """
-    Записывает PEM-содержимое ключа (ssh_private_key) в файл keys_dir/key_{i}.
+    Записывает содержимое ключа (ssh_private_key) в файл keys_dir/key_{i}.
     Возвращает список хостов с заполненным ssh_private_key_path.
     """
     Path(keys_dir).mkdir(parents=True, exist_ok=True)

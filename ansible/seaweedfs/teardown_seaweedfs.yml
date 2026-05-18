@@ -3,7 +3,7 @@
   become: yes
 
   roles:
-    - nginx
+    - delete_nginx
 
 - name: Remove S3 component
   hosts: s3
@@ -18,37 +18,3 @@
 
   roles:
     - delete_seaweedfs
-
-
-
-# # -----------------------------------------------------------------------------
-# # 4. Финальная проверка на всех узлах
-# # -----------------------------------------------------------------------------
-# - name: Final verification on all nodes
-#   hosts: all
-#   become: true
-
-#   tasks:
-#     - name: Check for any remaining weed/nginx processes
-#       ansible.builtin.shell: |
-#         echo "=== Processes ===" && \
-#         (pgrep -a weed && echo "WARNING: weed processes still running!") || echo "OK: no weed processes" && \
-#         (pgrep -a nginx && echo "WARNING: nginx processes still running!") || echo "OK: no nginx processes"
-#       register: final_check
-#       changed_when: false
-#       ignore_errors: true
-
-#     - name: Check for remaining binaries
-#       ansible.builtin.shell: |
-#         echo "=== Binaries ===" && \
-#         (which weed 2>/dev/null && echo "WARNING: weed binary still present") || echo "OK: weed binary removed" && \
-#         (which nginx 2>/dev/null && echo "WARNING: nginx binary still present") || echo "OK: nginx binary removed"
-#       register: binary_check
-#       changed_when: false
-#       ignore_errors: true
-
-#     - name: Display final check results
-#       ansible.builtin.debug:
-#         msg:
-#           - "{{ final_check.stdout_lines }}"
-#           - "{{ binary_check.stdout_lines }}"
