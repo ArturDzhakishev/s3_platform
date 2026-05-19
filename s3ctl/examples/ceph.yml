@@ -1,0 +1,31 @@
+# Пример файла для создания кластера Ceph
+# Использование: s3ctl cluster create --file ceph.yaml --watch
+
+name:   prod-ceph-01
+engine: ceph
+
+hosts:
+  - label:    node-master
+    ip:       192.168.1.110
+    ssh_user: user
+    ssh_port: 22
+    ssh_private_key_file: ~/.ssh/ceph
+
+  - label:    node-02
+    ip:       192.168.1.112
+    ssh_user: user
+    ssh_port: 22
+    ssh_private_key_file: ~/.ssh/ceph
+
+  - label:    node-03
+    ip:       192.168.1.113
+    ssh_user: user
+    ssh_port: 22
+    ssh_private_key_file: ~/.ssh/ceph
+
+extra_vars:
+  ceph_osd_pool_default_size: 3
+  ceph_osd_pool_default_min_size: 2
+  ceph_network: "192.168.1.0/24"
+  ceph_cluster_network: "192.168.1.0/24"
+  ceph_rgw_enable: true

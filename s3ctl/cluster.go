@@ -401,7 +401,7 @@ func watchJob(cl *Client, cfg *Config, jobID string) error {
 func parseNodeStr(s string) (*HostSpec, error) {
 	parts := strings.Split(s, ",")
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("--node: ожидается label,ip[,ssh_user[,ssh_port]], получено %q", s)
+		return nil, fmt.Errorf("--node: ожидается label,ip[,user[,port[,key_path]]], получено %q", s)
 	}
 	h := &HostSpec{
 		Label:   strings.TrimSpace(parts[0]),
@@ -418,6 +418,22 @@ func parseNodeStr(s string) (*HostSpec, error) {
 		if port > 0 {
 			h.SSHPort = port
 		}
+	}
+	// 5-й элемент — путь к SSH-ключу для этой ноды
+	if len(parts) >= 5 && strings.TrimSpace(parts[4]) != "" {
+		keyPath := strings.TrimSpace(parts[4])
+		// Раскрыть ~ в путях вида ~/.ssh/key
+		if strings.HasPrefix(keyPath, "~/") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				keyPath = home + keyPath[1:]
+			}
+		}
+		pem, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("--node %q: не удалось прочитать ключ %q: %w", s, keyPath, err)
+		}
+		h.SSHPrivateKey = string(pem)
 	}
 	return h, nil
 }

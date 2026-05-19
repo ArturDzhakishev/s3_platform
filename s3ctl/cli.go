@@ -31,11 +31,9 @@ const usage = `s3ctl — CLI для управления платформой S3
   host list       [--status available|in_use|unreachable]
   host ping       --ip <ip> --key-file <path> [--ssh-user user] [--ssh-port 22]
 
-  playbooks
-
 Формат --node:
   label,ip[,ssh_user[,ssh_port]]
-  Пример: --node "node1,192.168.1.110,user,22"
+  Пример: --node "node1,192.168.1.110,user,22,~/.ssh/master_key"
 
 Формат файла кластера (YAML или JSON):
   name:   prod-seaweedfs

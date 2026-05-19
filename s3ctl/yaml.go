@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strconv"
 	"strings"
 )
@@ -182,6 +183,23 @@ func applyHostField(h *HostSpec, key, val string) {
 		h.Zone = val
 	case "capacity":
 		h.Capacity = val
+	case "ssh_private_key_file":
+		keyPath := val
+		// Раскрыть ~ в путях вида ~/.ssh/key
+		if strings.HasPrefix(keyPath, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				keyPath = home + keyPath[1:]
+			}
+		}
+		pem, err := os.ReadFile(keyPath)
+		if err != nil {
+			// Не фатально при парсинге — ошибка всплывёт при деплое
+			_ = err
+		} else {
+			h.SSHPrivateKey = string(pem)
+		}
+	case "ssh_private_key":
+		h.SSHPrivateKey = val
 	case "groups":
 		// Inline list: [a, b, c]
 		if strings.HasPrefix(val, "[") {
