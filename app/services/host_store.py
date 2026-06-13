@@ -94,3 +94,21 @@ async def list_hosts(
         filt["status"] = status
     cursor = get_hosts_collection().find(filt, {"_id": 0}).sort("created_at", 1)
     return await cursor.to_list(length=None)
+
+async def remove_hosts_without_key(cluster_id: str, ips: list[str]) -> int:
+    """
+    Удаляет хосты кластера по IP у которых нет SSH-ключа.
+    Используется перед повторным scale после failed —
+    чтобы дать возможность добавить те же ноды с ключом.
+    Возвращает количество удалённых документов.
+    """
+    result = await get_hosts_collection().delete_many({
+        "cluster_id": cluster_id,
+        "ip":         {"$in": ips},
+        "$or": [
+            {"ssh_private_key": None},
+            {"ssh_private_key": ""},
+            {"ssh_private_key": {"$exists": False}},
+        ],
+    })
+    return result.deleted_count

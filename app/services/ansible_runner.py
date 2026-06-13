@@ -240,10 +240,12 @@ async def run_deploy_async(
     hosts:      list[dict],
     extra_vars: dict[str, Any],
     name:       str = "",
+    cluster_id: str | None = None,   # если передан — retry существующего кластера
 ) -> tuple[str, str]:
     pb_path    = _playbook_path(engine, "deploy")
     pb_name    = f"deploy_{engine}.yml"
-    cluster_id = str(uuid.uuid4())
+    is_retry   = cluster_id is not None
+    cluster_id = cluster_id or str(uuid.uuid4())
     job_id     = str(uuid.uuid4())
 
     if engine == "garage":
@@ -273,14 +275,20 @@ async def run_deploy_async(
         )
         host_ids.append(hid)
 
-    await create_cluster(
-        cluster_id=cluster_id,
-        name=name or f"{engine}-{cluster_id[:8]}",
-        engine=engine,
-        host_ids=host_ids,
-        extra_vars=extra_vars,
-        deploy_job_id=job_id,
-    )
+    if is_retry:
+        # При retry кластер уже существует — сбрасываем статус в deploying
+        from app.services.cluster_store import set_cluster_status
+        from app.schemas.enums import ClusterStatus
+        await set_cluster_status(cluster_id, ClusterStatus.deploying, error_msg=None)
+    else:
+        await create_cluster(
+            cluster_id=cluster_id,
+            name=name or f"{engine}-{cluster_id[:8]}",
+            engine=engine,
+            host_ids=host_ids,
+            extra_vars=extra_vars,
+            deploy_job_id=job_id,
+        )
 
     await create_job(
         job_id=job_id,
@@ -384,6 +392,39 @@ async def run_teardown_async(
 
 # ── Scale ─────────────────────────────────────────────────────────────────────
 
+async def _rollback_new_hosts(cluster_id: str, new_ips: list[str]) -> None:
+    """
+    Откатывает неудавшееся масштабирование:
+    - удаляет из hosts записи новых нод
+    - обновляет host_ids и node_count в кластере
+    """
+    from app.db.mongo import get_hosts_collection, get_clusters_collection
+    from datetime import datetime, timezone
+
+    # Удалить новые ноды из коллекции hosts
+    await get_hosts_collection().delete_many({
+        "cluster_id": cluster_id,
+        "ip": {"$in": new_ips},
+    })
+
+    # Пересчитать оставшиеся ноды
+    remaining = await get_hosts_collection().find(
+        {"cluster_id": cluster_id}, {"host_id": 1, "_id": 0}
+    ).to_list(length=None)
+    remaining_ids = [h["host_id"] for h in remaining]
+
+    await get_clusters_collection().update_one(
+        {"cluster_id": cluster_id},
+        {"$set": {
+            "host_ids":   remaining_ids,
+            "node_count": len(remaining_ids),
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    log.info("Rollback scale: удалены ноды %s из кластера %s", new_ips, cluster_id)
+
+
+
 async def run_scale_async(
     cluster_id: str,
     engine:     str,
@@ -452,9 +493,6 @@ async def run_scale_async(
         log.info("Scale %s → running  cluster=%s new=%s", job_id, cluster_id, new_nodes_ips)
         runner_dir = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, job_id)
         keys_dir   = os.path.join(settings.ANSIBLE_RUNNER_BASE_DIR, cluster_id, "keys")
-        # _write_key_files обрабатывает все хосты:
-        # - старые из MongoDB: уже имеют ssh_private_key_path → оставляет как есть
-        # - новые из запроса: могут иметь ssh_private_key (PEM) → пишет в keys_dir
         prepared  = _write_key_files(hosts, keys_dir)
         inventory = build_inventory(
             prepared, engine=engine, runner_dir=runner_dir, new_ips=set(new_nodes_ips)
@@ -468,15 +506,20 @@ async def run_scale_async(
         except Exception as exc:
             log.exception("Scale %s: ошибка runner", job_id)
             await set_finished(job_id, rc=1, log=str(exc))
-            await set_cluster_status(cluster_id, ClusterStatus.failed, error_msg=str(exc))
+            # Кластер возвращается в ready — задача упала, но кластер жив
+            # Новые ноды удаляются из инвентаря чтобы не мешать повторной попытке
+            await _rollback_new_hosts(cluster_id, new_nodes_ips)
+            await set_cluster_ready(cluster_id, s3_endpoint=_s3_endpoint(engine, hosts))
             return
         await set_finished(job_id, rc=rc, log=stdout)
         if rc == 0:
             await set_cluster_ready(cluster_id, s3_endpoint=_s3_endpoint(engine, hosts))
             log.info("Scale %s → success", job_id)
         else:
-            await set_cluster_status(cluster_id, ClusterStatus.failed, error_msg=f"scale rc={rc}")
-            log.warning("Scale %s → failed rc=%d", job_id, rc)
+            # Задача failed — кластер возвращается в ready, новые ноды удаляются
+            await _rollback_new_hosts(cluster_id, new_nodes_ips)
+            await set_cluster_ready(cluster_id, s3_endpoint=_s3_endpoint(engine, hosts))
+            log.warning("Scale %s → failed rc=%d, кластер возвращён в ready", job_id, rc)
 
     asyncio.create_task(_bg(), name=f"scale-{job_id}")
     return job_id

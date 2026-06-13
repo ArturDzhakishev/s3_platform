@@ -61,3 +61,11 @@ async def list_jobs(cluster_id: str | None = None, status: str | None = None, li
     if status:     filt["status"] = status
     cursor = get_jobs_collection().find(filt, {"_id": 0}).sort("created_at", -1).limit(limit)
     return await cursor.to_list(length=limit)
+
+async def get_last_failed_job(cluster_id: str) -> dict | None:
+    """Возвращает последнюю упавшую задачу кластера."""
+    return await get_jobs_collection().find_one(
+        {"cluster_id": cluster_id, "status": "failed"},
+        {"_id": 0},
+        sort=[("created_at", -1)],
+    )

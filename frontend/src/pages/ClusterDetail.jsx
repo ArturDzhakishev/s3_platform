@@ -180,8 +180,9 @@ export function ClusterDetail() {
   const [scaleOpen, setScaleOpen] = useState(false)
   const [newHost, setNewHost] = useState(emptyHost())
   const [scaling, setScaling] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [error, setError]     = useState(null)
+  const [deleting,  setDeleting]  = useState(false)
+  const [retrying,  setRetrying]  = useState(false)
+  const [error,     setError]     = useState(null)
 
   const fetch = useCallback(async () => {
     try {
@@ -251,6 +252,20 @@ export function ClusterDetail() {
     }
   }
 
+  async function handleRetry() {
+    if (!confirm('Повторить последнюю упавшую операцию?')) return
+    setRetrying(true)
+    setError(null)
+    try {
+      await api.clusters.retry(id)
+      // polling подхватит новый статус автоматически
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   if (loading) return (
     <div className="flex items-center justify-center h-64 text-muted text-sm animate-pulse">
       Загрузка…
@@ -263,7 +278,8 @@ export function ClusterDetail() {
     </div>
   )
 
-  const canScale = cluster.status === 'ready'
+  const canScale  = cluster.status === 'ready'
+  const canRetry  = cluster.status === 'failed'
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-slide-up">
@@ -288,6 +304,15 @@ export function ClusterDetail() {
           >
             ⊕ Добавить ноду
           </button>
+          {canRetry && (
+            <button
+              onClick={handleRetry}
+              disabled={retrying}
+              className="btn-ghost text-sm border border-yellow/40 text-yellow hover:bg-yellow/10 disabled:opacity-40"
+            >
+              {retrying ? '↻ Запуск…' : '↻ Повторить'}
+            </button>
+          )}
           <button onClick={handleDelete} disabled={deleting} className="btn-danger text-sm">
             {deleting ? 'Удаление…' : '⊗ Удалить'}
           </button>
@@ -296,6 +321,27 @@ export function ClusterDetail() {
 
       {error && (
         <div className="card p-3 border-red/30 bg-red/5 text-red text-sm">{error}</div>
+      )}
+
+      {/* Failed banner */}
+      {cluster.status === 'failed' && (
+        <div className="card p-4 border-yellow/30 bg-yellow/5 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-sm font-semibold text-yellow mb-1">
+              ⚠ Операция завершилась с ошибкой
+            </div>
+            <div className="text-xs text-muted">
+              {cluster.error_msg || 'Смотрите лог последней задачи для деталей.'}
+            </div>
+          </div>
+          <button
+            onClick={handleRetry}
+            disabled={retrying}
+            className="btn-ghost text-sm border border-yellow/40 text-yellow hover:bg-yellow/10 shrink-0 disabled:opacity-40"
+          >
+            {retrying ? '↻ Запуск…' : '↻ Повторить операцию'}
+          </button>
+        </div>
       )}
 
       {/* Info cards */}

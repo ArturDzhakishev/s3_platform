@@ -57,7 +57,7 @@ async def set_cluster_ready(cluster_id: str, s3_endpoint: str | None = None) -> 
 
 
 async def set_cluster_status(cluster_id: str, status: ClusterStatus, error_msg: str | None = None) -> None:
-    upd: dict = {"status": status.value, "updated_at": _now()}
+    upd: dict = {"status": status.value, "updated_at": _now(), "error_msg": error_msg}
     if error_msg is not None:
         upd["error_msg"] = error_msg
     await get_clusters_collection().update_one({"cluster_id": cluster_id}, {"$set": upd})

@@ -1,0 +1,7 @@
+new_hosts:
+  - label:               node-04
+    ip:                  192.168.1.111
+    ssh_user:            user
+    ssh_port:            22
+    ssh_private_key_file: ~/.ssh/ceph
+    groups:              [seaweedfs, s3]

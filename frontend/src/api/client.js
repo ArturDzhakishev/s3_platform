@@ -26,6 +26,7 @@ export const api = {
     delete: (id)      => request('DELETE', `/clusters/${id}`),
     scale:  (id, body)=> request('POST',   `/clusters/${id}/scale`, body),
     jobs:   (id)      => request('GET',    `/clusters/${id}/jobs`),
+    retry:  (id)      => request('POST',   `/clusters/${id}/retry`),
   },
 
   // ── Jobs ────────────────────────────────────────────────────────────────
