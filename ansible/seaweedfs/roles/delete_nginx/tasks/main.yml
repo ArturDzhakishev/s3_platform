@@ -1,3 +1,4 @@
+---
 - name: Stop nginx service
   ansible.builtin.service:
     name: nginx
@@ -15,14 +16,23 @@
   ignore_errors: true
   changed_when: false
 
-- name: Remove nginx package with purge
+# Удаление через package — работает на любом менеджере пакетов
+- name: Remove nginx package (Debian — with purge)
   ansible.builtin.apt:
     name: nginx
     state: absent
     purge: true
     autoremove: true
+  when: ansible_os_family == 'Debian'
 
-- name: Remove residual nginx directories left after purge
+- name: Remove nginx package (RedHat)
+  ansible.builtin.dnf:
+    name: nginx
+    state: absent
+    autoremove: true
+  when: ansible_os_family == 'RedHat'
+
+- name: Remove residual nginx directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -42,4 +52,4 @@
 
 - name: Nginx removal complete
   ansible.builtin.debug:
-    msg: "Nginx (+ seaweedfs-s3.conf symlink/config + default) removed from {{ inventory_hostname }}"
+    msg: "Nginx removed from {{ inventory_hostname }}"

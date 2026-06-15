@@ -1,43 +1,58 @@
 ---
 - name: Prepare worker nodes for Ceph installation
   block:
-    - name: Install dependencies
-      apt:
-        name:
-          - lvm2
-          - chrony
-          - gdisk
-          - curl
-          - docker.io
+    # RedHat: добавить Docker репозиторий если docker-ce не установлен
+    - name: Add Docker repository (RedHat family)
+      ansible.builtin.command: >
+        dnf config-manager --add-repo
+        https://download.docker.com/linux/centos/docker-ce.repo
+      when:
+        - ansible_os_family == 'RedHat'
+        - ansible_pkg_mgr in ['dnf', 'yum']
+      changed_when: false
+      ignore_errors: true
+
+    - name: Install base dependencies
+      ansible.builtin.package:
+        name: "{{ pkgs_base }}"
         state: present
-        update_cache: yes
+
+    - name: Install Docker
+      ansible.builtin.package:
+        name: "{{ pkgs_docker }}"
+        state: present
 
     - name: Enable and start Docker
-      service:
-        name: docker
+      ansible.builtin.service:
+        name: "{{ docker_service }}"
         state: started
         enabled: yes
 
     - name: Ensure /dev/sdb is not mounted
-      shell: umount /dev/sdb* || true
+      ansible.builtin.shell: umount /dev/sdb* || true
       ignore_errors: true
+      changed_when: false
 
     - name: Zap /dev/sdb using sgdisk
-      command: sgdisk --zap-all /dev/sdb
+      ansible.builtin.command: sgdisk --zap-all /dev/sdb
       ignore_errors: true
+      changed_when: false
 
     - name: Wipe filesystem signatures from /dev/sdb
-      command: wipefs -a /dev/sdb
+      ansible.builtin.command: wipefs -a /dev/sdb
       ignore_errors: true
+      changed_when: false
 
     - name: Overwrite beginning of /dev/sdb with zeros
-      command: dd if=/dev/zero of=/dev/sdb bs=1M count=100
+      ansible.builtin.command: dd if=/dev/zero of=/dev/sdb bs=1M count=100
       ignore_errors: true
+      changed_when: false
 
-    - name: Ensure chronyd is running and enabled
-      service:
-        name: chrony
+    - name: Ensure time sync daemon is running
+      ansible.builtin.service:
+        name: "{{ chrony_service }}"
         state: started
         enabled: yes
+
   when: inventory_hostname in groups['workers']
   become: true

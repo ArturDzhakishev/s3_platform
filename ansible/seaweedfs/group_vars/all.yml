@@ -26,3 +26,26 @@ s3_access_key: admin
 s3_secret_key: secretkey
 s3_actions: "Admin,Read,Write,List,Tagging"
 s3_credentials_output_dir: "{{ playbook_dir }}/output"
+
+# ── Архитектура для скачивания бинарника ──────────────────────────────────────
+# Определяется автоматически через факты Ansible
+_seaweedfs_arch_map:
+  x86_64:  "linux_amd64"
+  aarch64: "linux_arm64"
+  armv7l:  "linux_arm"
+
+seaweedfs_arch: "{{ _seaweedfs_arch_map[ansible_architecture] | default('linux_amd64') }}"
+seaweedfs_download_url: "https://github.com/seaweedfs/seaweedfs/releases/latest/download/{{ seaweedfs_arch }}.tar.gz"
+
+# ── Пакеты nginx по семейству ОС ─────────────────────────────────────────────
+_nginx_pkg_debian: nginx
+_nginx_pkg_redhat: nginx   # одинаково, но конфигурация различается
+
+nginx_pkg: "{{ _nginx_pkg_redhat if ansible_os_family == 'RedHat' else _nginx_pkg_debian }}"
+
+# Пути конфигурации nginx
+# Debian: sites-available / sites-enabled
+# RedHat: conf.d
+nginx_conf_dir: "{{ '/etc/nginx/conf.d' if ansible_os_family == 'RedHat' else '/etc/nginx/sites-available' }}"
+nginx_enabled_dir: "{{ '/etc/nginx/conf.d' if ansible_os_family == 'RedHat' else '/etc/nginx/sites-enabled' }}"
+nginx_use_sites: "{{ ansible_os_family != 'RedHat' }}"

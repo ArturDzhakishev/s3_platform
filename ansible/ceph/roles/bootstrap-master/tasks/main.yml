@@ -1,40 +1,49 @@
 ---
 - name: Master bootstrap
   block:
+    # ── Docker ───────────────────────────────────────────────────────────────
+    - name: Add Docker repository (RedHat family)
+      ansible.builtin.command: >
+        dnf config-manager --add-repo
+        https://download.docker.com/linux/centos/docker-ce.repo
+      when:
+        - ansible_os_family == 'RedHat'
+        - ansible_pkg_mgr in ['dnf', 'yum']
+      changed_when: false
+      ignore_errors: true
+
     - name: Check if Docker is already installed
-      stat:
+      ansible.builtin.stat:
         path: /usr/bin/docker
       register: docker_check
 
     - name: Install Docker
-      apt:
-        name: 
-          - docker.io
-          - chrony
+      ansible.builtin.package:
+        name: "{{ pkgs_docker }}"
         state: present
-        update_cache: yes
       when: not docker_check.stat.exists
 
     - name: Enable and start Docker
-      service:
-        name: docker
+      ansible.builtin.service:
+        name: "{{ docker_service }}"
         state: started
         enabled: yes
 
-    - name: Install base dependencies
-      apt:
-        name: [cephadm, ceph-common, openssh-server]
+    # ── Ceph base packages ────────────────────────────────────────────────────
+    - name: Install Ceph base dependencies
+      ansible.builtin.package:
+        name: "{{ pkgs_ceph }}"
         state: present
-        update_cache: yes
 
+    # ── Bootstrap ─────────────────────────────────────────────────────────────
     - name: Check if Ceph already bootstrapped
-      stat:
+      ansible.builtin.stat:
         path: /etc/ceph/ceph.conf
       register: ceph_conf
 
-    #  Убрать skip-pull in production
+    # Убрать --skip-pull в production
     - name: Bootstrap Ceph cluster using cephadm
-      command: >
+      ansible.builtin.command: >
         cephadm bootstrap
         --mon-ip {{ ansible_host }}
         --skip-dashboard
@@ -42,24 +51,39 @@
         --ssh-user {{ ceph_ssh_user }}
       register: ceph_bootstrap
       when: not ceph_conf.stat.exists
-      # retries: 5
-      # delay: 10
-      # until: ceph_bootstrap.finished is defined and ceph_bootstrap.rc == 0
 
-    - name: Get Ceph Public Key
-      command: ceph cephadm get-pub-key
-      register: ceph_pub_key
-      delegate_to: "{{ groups['master'][0] }}"
+    # ── Ceph public key ───────────────────────────────────────────────────────
+    # Получаем ключ через cephadm — работает на всех ОС
+    - name: Get Ceph Public Key via cephadm
+      ansible.builtin.command: cephadm get-pub-key
+      register: ceph_pub_key_cephadm
       changed_when: false
+      failed_when: false
 
-    - name: Save Ceph Public Key to file on Master
-      copy:
-        content: "{{ ceph_pub_key.stdout }}"
-        dest: "/etc/ceph/ceph.pub"
+    # Fallback: читаем из файла если cephadm get-pub-key не поддерживается
+    - name: Get Ceph Public Key from file (fallback)
+      ansible.builtin.slurp:
+        src: /etc/ceph/ceph.pub
+      register: ceph_pub_key_file
+      when: ceph_pub_key_cephadm.rc != 0
+      failed_when: false
+
+    - name: Set ceph_pub_key_content fact
+      ansible.builtin.set_fact:
+        ceph_pub_key_content: >-
+          {{
+            ceph_pub_key_cephadm.stdout
+            if ceph_pub_key_cephadm.rc == 0
+            else (ceph_pub_key_file.content | b64decode)
+          }}
+
+    - name: Save Ceph Public Key to /etc/ceph/ceph.pub
+      ansible.builtin.copy:
+        content: "{{ ceph_pub_key_content }}"
+        dest: /etc/ceph/ceph.pub
         owner: "{{ ceph_ssh_user }}"
         group: "{{ ceph_ssh_user }}"
         mode: '0644'
-      delegate_to: "{{ groups['master'][0] }}"
-      run_once: true
+
   when: inventory_hostname in groups['master']
   become: true

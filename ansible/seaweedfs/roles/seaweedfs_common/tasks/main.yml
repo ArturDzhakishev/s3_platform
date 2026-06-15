@@ -1,36 +1,42 @@
-- name: Check if SeaweedFS binary exists in /usr/local/bin
-  stat:
+---
+- name: Check if SeaweedFS binary exists
+  ansible.builtin.stat:
     path: /usr/local/bin/weed
   register: weed_bin
 
-- name: Create temporary directory for extraction
-  file:
+- name: Create temporary extraction directory
+  ansible.builtin.file:
     path: /tmp/seaweed_extract
     state: directory
+    mode: '0755'
   when: not weed_bin.stat.exists
 
-- name: Download SeaweedFS on controller
-  delegate_to: localhost
-  get_url:
-    url: https://github.com/seaweedfs/seaweedfs/releases/latest/download/linux_amd64.tar.gz
+# Скачиваем на control node — arch определяется автоматически через ansible_architecture
+- name: Download SeaweedFS on controller (arch={{ seaweedfs_arch }})
+  ansible.builtin.get_url:
+    url: "{{ seaweedfs_download_url }}"
     dest: /tmp/seaweedfs.tar.gz
+    mode: '0644'
+  delegate_to: localhost
+  run_once: false
   when: not weed_bin.stat.exists
 
-- name: Copy SeaweedFS to node
+- name: Copy SeaweedFS archive to node
   ansible.builtin.copy:
     src: /tmp/seaweedfs.tar.gz
     dest: /tmp/seaweedfs.tar.gz
+    mode: '0644'
   when: not weed_bin.stat.exists
 
-- name: Extract SeaweedFS to temp folder
-  unarchive:
+- name: Extract SeaweedFS binary
+  ansible.builtin.unarchive:
     src: /tmp/seaweedfs.tar.gz
     dest: /tmp/seaweed_extract
     remote_src: yes
   when: not weed_bin.stat.exists
 
-- name: Move binary to /usr/local/bin
-  copy:
+- name: Install weed binary to /usr/local/bin
+  ansible.builtin.copy:
     src: /tmp/seaweed_extract/weed
     dest: /usr/local/bin/weed
     mode: '0755'
@@ -38,7 +44,7 @@
   when: not weed_bin.stat.exists
 
 - name: Cleanup temporary files
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
@@ -47,7 +53,7 @@
   when: not weed_bin.stat.exists
 
 - name: Create working directories
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0755'

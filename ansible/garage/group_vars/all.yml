@@ -28,3 +28,30 @@ garage_nodes_config:
     capacity: 2G
 
 name_bucket: test
+
+# ── Архитектура для скачивания бинарника Garage ───────────────────────────────
+# Определяется автоматически через ansible_architecture (из Gathering Facts)
+#
+# Garage публикует бинарники для musl (статическая линковка) —
+# работает на любом Linux без зависимостей от glibc версии
+#
+# Полный список таргетов: https://garagehq.deuxfleurs.fr/_releases/
+_garage_arch_map:
+  x86_64:  "x86_64-unknown-linux-musl"
+  aarch64: "aarch64-unknown-linux-musl"
+  armv7l:  "armv6l-unknown-linux-musleabihf"
+  armv6l:  "armv6l-unknown-linux-musleabihf"
+
+garage_arch: "{{ _garage_arch_map[ansible_architecture] | default('x86_64-unknown-linux-musl') }}"
+
+garage_download_url: >-
+  https://garagehq.deuxfleurs.fr/_releases/v{{ garage_version }}/{{ garage_arch }}/garage
+
+# ── Утилита для скачивания ────────────────────────────────────────────────────
+# wget или curl — оба умеют скачивать, выбираем по наличию
+# Ansible get_url не требует внешней утилиты, поэтому wget как зависимость убран
+# Оставляем переменную для возможных кастомных сценариев
+_dl_pkgs_debian: []   # get_url не требует wget
+_dl_pkgs_redhat: []
+
+dl_pkgs: "{{ _dl_pkgs_redhat if ansible_os_family == 'RedHat' else _dl_pkgs_debian }}"

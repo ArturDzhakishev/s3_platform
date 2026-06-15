@@ -1,26 +1,33 @@
-- name: Install dependencies
-  apt:
-    name:
-      - wget
-    update_cache: yes
+---
+# ── Скачивание бинарника ──────────────────────────────────────────────────────
 
-- name: Download Garage binary to control node
-  get_url:
-    url: "https://garagehq.deuxfleurs.fr/_releases/v{{ garage_version }}/x86_64-unknown-linux-musl/garage"
-    dest: "/tmp/garage_v{{ garage_version }}"
+- name: Check if Garage binary already exists
+  ansible.builtin.stat:
+    path: /usr/local/bin/garage
+  register: garage_bin
+
+- name: Download Garage binary to control node (arch={{ garage_arch }})
+  ansible.builtin.get_url:
+    url: "{{ garage_download_url }}"
+    dest: "/tmp/garage_v{{ garage_version }}_{{ garage_arch }}"
+    mode: '0755'
   delegate_to: localhost
-  run_once: true
+  run_once: false
+  when: not garage_bin.stat.exists
 
 - name: Propagate Garage binary to nodes
-  copy:
-    src: "/tmp/garage_v{{ garage_version }}"
+  ansible.builtin.copy:
+    src: "/tmp/garage_v{{ garage_version }}_{{ garage_arch }}"
     dest: /usr/local/bin/garage
     mode: '0755'
     owner: root
     group: root
+  when: not garage_bin.stat.exists
 
-- name: Create directories
-  file:
+# ── Директории и конфигурация ─────────────────────────────────────────────────
+
+- name: Create Garage data directories
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
@@ -28,28 +35,31 @@
     - "{{ garage_meta_dir }}"
     - "{{ garage_data_dir }}"
 
-- name: Generate config
-  template:
+- name: Generate Garage config (/etc/garage.toml)
+  ansible.builtin.template:
     src: garage.toml.j2
     dest: /etc/garage.toml
+    mode: '0644'
 
-- name: Create systemd service
-  template:
+# ── Systemd unit ──────────────────────────────────────────────────────────────
+
+- name: Deploy Garage systemd unit
+  ansible.builtin.template:
     src: garage.service.j2
     dest: /etc/systemd/system/garage.service
+    mode: '0644'
 
-- name: Reload systemd
-  systemd:
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
     daemon_reload: yes
 
 - name: Enable and start Garage
-  systemd:
+  ansible.builtin.systemd:
     name: garage
     enabled: yes
     state: started
 
-- name: Wait for Garage
-  wait_for:
-    port: 3901
+- name: Wait for Garage RPC port to be ready
+  ansible.builtin.wait_for:
+    port: "{{ garage_rpc_port }}"
     timeout: 30
-    

@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="S3-Compatible Storage Platform API — MVP",
+    title="S3-platform",
     version="0.1.0",
     description=(
         "Асинхронный запуск Ansible-плейбуков.\n\n"

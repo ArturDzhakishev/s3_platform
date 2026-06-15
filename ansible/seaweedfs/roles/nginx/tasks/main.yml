@@ -1,10 +1,27 @@
-- name: Create nginx config dir before install
+---
+# ── Установка nginx ───────────────────────────────────────────────────────────
+
+- name: Install Nginx
+  ansible.builtin.package:
+    name: "{{ nginx_pkg }}"
+    state: present
+
+- name: Start and enable Nginx
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: yes
+
+# ── Конфигурация (Debian: sites-available/enabled, RedHat: conf.d) ────────────
+
+- name: Ensure nginx config directory exists
   ansible.builtin.file:
-    path: /etc/nginx/sites-available
+    path: "{{ nginx_conf_dir }}"
     state: directory
     mode: '0755'
 
-- name: Pre-deploy default site without IPv6
+# На Debian убираем default-конфиг с IPv6 который ломает запуск
+- name: Pre-deploy default site without IPv6 (Debian)
   ansible.builtin.copy:
     dest: /etc/nginx/sites-available/default
     content: |
@@ -14,34 +31,35 @@
           server_name _;
       }
     mode: '0644'
+  when: nginx_use_sites | bool
 
-- name: Install Nginx
-  ansible.builtin.apt:
-    name: nginx
-    state: present
-    update_cache: yes
-
-- name: Start and enable Nginx
-  ansible.builtin.service:
-    name: nginx
-    state: started
-    enabled: yes
-
-- name: Remove default Nginx config
+- name: Remove default Nginx site (Debian)
   ansible.builtin.file:
     path: /etc/nginx/sites-enabled/default
     state: absent
+  when: nginx_use_sites | bool
+
+# На RedHat убираем стандартный conf.d/default.conf
+- name: Remove default Nginx config (RedHat)
+  ansible.builtin.file:
+    path: /etc/nginx/conf.d/default.conf
+    state: absent
+  when: not nginx_use_sites | bool
+
+# ── Деплой конфига SeaweedFS S3 ───────────────────────────────────────────────
 
 - name: Deploy SeaweedFS S3 proxy config
   ansible.builtin.template:
     src: nginx_s3.conf.j2
-    dest: /etc/nginx/sites-available/seaweedfs-s3.conf
+    dest: "{{ nginx_conf_dir }}/seaweedfs-s3.conf"
     mode: '0644'
   notify: restart nginx
 
-- name: Enable SeaweedFS S3 proxy site
+# Debian: создаём symlink из sites-available в sites-enabled
+- name: Enable SeaweedFS S3 site (Debian symlink)
   ansible.builtin.file:
-    src: /etc/nginx/sites-available/seaweedfs-s3.conf
+    src: "{{ nginx_conf_dir }}/seaweedfs-s3.conf"
     dest: /etc/nginx/sites-enabled/seaweedfs-s3.conf
     state: link
+  when: nginx_use_sites | bool
   notify: restart nginx

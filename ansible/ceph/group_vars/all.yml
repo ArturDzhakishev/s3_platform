@@ -18,3 +18,45 @@ rgw_count: 1
 
 rgw_user_uid: s3user4
 rgw_user_display_name: "S3 User4"
+
+# ── Пакеты по семейству ОС ────────────────────────────────────────────────────
+# Debian/Ubuntu
+_pkgs_base_debian:
+  - lvm2
+  - chrony
+  - gdisk
+  - curl
+
+_pkgs_docker_debian:
+  - docker.io
+
+_pkgs_ceph_debian:
+  - cephadm
+  - ceph-common
+  - openssh-server
+
+# RedHat/CentOS/Rocky/AlmaLinux
+_pkgs_base_redhat:
+  - lvm2
+  - chrony
+  - gdisk
+  - curl
+
+_pkgs_docker_redhat:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+
+_pkgs_ceph_redhat:
+  - cephadm
+  - ceph-common
+  - openssh-server
+
+# Итоговые переменные — выбираются автоматически по ansible_os_family
+pkgs_base:   "{{ _pkgs_base_redhat   if ansible_os_family == 'RedHat' else _pkgs_base_debian }}"
+pkgs_docker: "{{ _pkgs_docker_redhat if ansible_os_family == 'RedHat' else _pkgs_docker_debian }}"
+pkgs_ceph:   "{{ _pkgs_ceph_redhat   if ansible_os_family == 'RedHat' else _pkgs_ceph_debian }}"
+
+# Имя Docker-сервиса одинаковое, имя chrony различается
+chrony_service: "{{ 'chronyd' if ansible_os_family == 'RedHat' else 'chrony' }}"
+docker_service: docker
